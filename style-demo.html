@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pony Quest — Art Style Comparison</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1a2a;color:#ccc;font-family:monospace;padding:20px}
+h1{color:#e8c840;margin-bottom:10px;font-size:18px}
+h2{color:#c0a030;margin:15px 0 5px;font-size:14px}
+p{font-size:12px;color:#888;margin-bottom:10px;max-width:700px;line-height:1.5}
+.row{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:20px}
+.panel{background:#111;border:1px solid #333;padding:10px;border-radius:4px}
+.panel h3{color:#aaa;font-size:11px;margin-bottom:8px}
+canvas{image-rendering:pixelated;image-rendering:crisp-edges;display:block;margin:0 auto}
+</style>
+</head>
+<body>
+<h1>Pony Quest — Art Style Comparison</h1>
+<p>Four different rendering approaches for the same character and scene. Each panel shows Paul Anthem at 320x200 native resolution, scaled 3x. Pick the direction you like best.</p>
+
+<h2>Paul Anthem — Character Sprite</h2>
+<div class="row" id="charRow"></div>
+
+<h2>Police Station — Background Corner</h2>
+<div class="row" id="bgRow"></div>
+
+<h2>M25 Motorway — Scene Sample</h2>
+<div class="row" id="sceneRow"></div>
+
+<script>
+'use strict';
+
+// Utility: create a scaled canvas in a labelled panel
+function makePanel(parent, title, w, h, scale) {
+  const div = document.createElement('div');
+  div.className = 'panel';
+  const lbl = document.createElement('h3');
+  lbl.textContent = title;
+  div.appendChild(lbl);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.style.width = (w*scale)+'px'; c.style.height = (h*scale)+'px';
+  div.appendChild(c);
+  parent.appendChild(div);
+  return c.getContext('2d');
+}
+
+function R(ctx,x,y,w,h,c){ctx.fillStyle=c;ctx.fillRect(x,y,w,h);}
+
+// ============================================================
+// STYLE A: Current (rectangle stacking) — for reference
+// ============================================================
+function drawPaulA(ctx, px, py) {
+  const x=px-6, y=py-24;
+  R(ctx,x+2,y,8,3,'#3a2a1a');
+  R(ctx,x+2,y+3,8,5,'#dba67a');
+  R(ctx,x+4,y+5,1,1,'#222');R(ctx,x+7,y+5,1,1,'#222');
+  R(ctx,x+1,y+8,10,8,'#1a2744');
+  R(ctx,x+1,y+8,2,1,'#2a3a5a');R(ctx,x+9,y+8,2,1,'#2a3a5a');
+  R(ctx,x+4,y+9,1,1,'#ccc');
+  R(ctx,x+1,y+15,10,1,'#111');
+  R(ctx,x+2,y+16,3,6,'#1a2744');R(ctx,x+7,y+16,3,6,'#1a2744');
+  R(ctx,x+2,y+22,3,2,'#111');R(ctx,x+7,y+22,3,2,'#111');
+  R(ctx,x,y+9,2,5,'#1a2744');R(ctx,x+10,y+9,2,5,'#1a2744');
+}
+
+// ============================================================
+// STYLE B: Hand-crafted pixel art (pixel-data sprite)
+// ============================================================
+const PAUL_B_PALETTE = [
+  null,          // 0 = transparent
+  '#2a1a0e',     // 1 = dark hair
+  '#4a3020',     // 2 = hair mid
+  '#dba67a',     // 3 = skin
+  '#c49060',     // 4 = skin shadow
+  '#111c33',     // 5 = uniform dark
+  '#1a2744',     // 6 = uniform mid
+  '#243358',     // 7 = uniform light
+  '#2a3a5a',     // 8 = uniform highlight
+  '#0a0a0a',     // 9 = black (shoes/belt)
+  '#c0c0c0',     // 10 = silver (badge)
+  '#888888',     // 11 = buckle
+  '#e8d0a8',     // 12 = skin highlight
+  '#1a1a1a',     // 13 = dark grey
+  '#333333',     // 14 = eye
+  '#ffffff',     // 15 = eye white
+  '#cc3333',     // 16 = tie accent
+];
+
+// 16 wide x 28 tall pixel art sprite
+const PAUL_B = [
+//0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5
+ [0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0], // 0  hair top
+ [0,0,0,0,1,2,2,2,2,2,2,1,0,0,0,0], // 1  hair
+ [0,0,0,0,1,2,1,2,2,1,2,1,0,0,0,0], // 2  hair with parting
+ [0,0,0,0,1,3,3,3,3,3,3,1,0,0,0,0], // 3  forehead
+ [0,0,0,0,4,3,12,3,3,12,3,4,0,0,0,0], // 4  eyes area
+ [0,0,0,0,4,3,14,3,3,14,3,4,0,0,0,0], // 5  eyes
+ [0,0,0,0,0,4,3,3,3,3,4,0,0,0,0,0], // 6  nose
+ [0,0,0,0,0,4,3,4,4,3,4,0,0,0,0,0], // 7  mouth
+ [0,0,0,0,0,0,4,3,3,4,0,0,0,0,0,0], // 8  chin/neck
+ [0,0,0,8,8,7,6,6,6,6,7,8,8,0,0,0], // 9  shoulders
+ [0,0,0,7,6,6,10,6,6,6,6,6,7,0,0,0], // 10 upper chest + badge
+ [0,0,0,5,6,6,6,16,6,6,6,6,5,0,0,0], // 11 chest + tie
+ [0,0,7,5,6,6,6,16,6,6,6,6,5,7,0,0], // 12 torso + arms
+ [0,0,6,5,6,6,6,6,6,6,6,6,5,6,0,0], // 13 torso
+ [0,0,6,5,6,6,6,6,6,6,6,6,5,6,0,0], // 14 waist area
+ [0,0,4,9,9,9,9,9,9,9,9,9,9,4,0,0], // 15 belt
+ [0,0,0,9,5,11,5,9,9,5,11,5,9,0,0,0], // 16 belt detail
+ [0,0,0,0,5,6,6,5,5,6,6,5,0,0,0,0], // 17 upper legs
+ [0,0,0,0,5,6,6,5,5,6,6,5,0,0,0,0], // 18 legs
+ [0,0,0,0,5,6,6,0,0,6,6,5,0,0,0,0], // 19 legs (gap)
+ [0,0,0,0,5,6,6,0,0,6,6,5,0,0,0,0], // 20 legs
+ [0,0,0,0,5,6,5,0,0,5,6,5,0,0,0,0], // 21 lower legs
+ [0,0,0,0,5,6,5,0,0,5,6,5,0,0,0,0], // 22 lower legs
+ [0,0,0,0,5,5,5,0,0,5,5,5,0,0,0,0], // 23 ankles
+ [0,0,0,0,9,9,9,0,0,9,9,9,0,0,0,0], // 24 shoes
+ [0,0,0,9,9,9,9,0,0,9,9,9,9,0,0,0], // 25 shoes
+ [0,0,0,9,13,9,9,0,0,9,9,13,9,0,0,0], // 26 shoe detail
+ [0,0,0,0,13,13,0,0,0,0,13,13,0,0,0,0], // 27 sole
+];
+
+function drawPixelSprite(ctx, data, palette, px, py) {
+  for(let y=0;y<data.length;y++) {
+    for(let x=0;x<data[y].length;x++) {
+      const c=data[y][x];
+      if(c===0) continue;
+      ctx.fillStyle=palette[c];
+      ctx.fillRect(px+x, py+y, 1, 1);
+    }
+  }
+}
+
+// ============================================================
+// STYLE C: Outlined pixel art with sub-pixel shading
+// ============================================================
+const PAUL_C_PALETTE = [
+  null,          // 0
+  '#0a0a12',     // 1 = outline
+  '#2a1a0e',     // 2 = dark hair
+  '#5a3828',     // 3 = hair mid
+  '#dba67a',     // 4 = skin
+  '#c49060',     // 5 = skin shadow
+  '#ecd4a8',     // 6 = skin highlight
+  '#0f1a30',     // 7 = uniform darkest
+  '#1a2744',     // 8 = uniform dark
+  '#243358',     // 9 = uniform mid
+  '#2e4070',     // 10 = uniform light
+  '#3a5088',     // 11 = uniform highlight
+  '#c0c0c0',     // 12 = silver
+  '#111',        // 13 = black
+  '#e0e0e0',     // 14 = white
+  '#cc3333',     // 15 = tie
+  '#888',        // 16 = belt buckle
+  '#1a1a2a',     // 17 = shoe dark
+  '#2a2a3a',     // 18 = shoe mid
+];
+
+const PAUL_C = [
+ [0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0],
+ [0,0,0,0,1,3,2,3,3,2,3,1,0,0,0,0],
+ [0,0,0,1,3,2,2,2,2,2,2,3,1,0,0,0],
+ [0,0,0,1,2,3,2,3,3,2,3,2,1,0,0,0],
+ [0,0,0,1,5,4,6,4,4,6,4,5,1,0,0,0],
+ [0,0,0,1,5,4,13,4,4,13,4,5,1,0,0,0],
+ [0,0,0,0,1,5,4,4,4,4,5,1,0,0,0,0],
+ [0,0,0,0,1,5,4,5,5,4,5,1,0,0,0,0],
+ [0,0,0,0,0,1,5,4,4,5,1,0,0,0,0,0],
+ [0,0,1,1,11,10,9,9,9,9,10,11,1,1,0,0],
+ [0,0,1,10,9,9,12,9,15,9,9,9,10,1,0,0],
+ [0,0,1,9,8,8,8,15,8,8,8,8,9,1,0,0],
+ [0,1,10,9,8,8,8,15,8,8,8,8,9,10,1,0],
+ [0,1,9,7,8,8,8,8,8,8,8,8,7,9,1,0],
+ [0,1,5,7,8,8,8,8,8,8,8,8,7,5,1,0],
+ [0,0,1,13,13,16,13,13,13,16,13,13,1,0,0,0],
+ [0,0,0,1,7,8,9,7,7,9,8,7,1,0,0,0],
+ [0,0,0,1,7,8,9,7,7,9,8,7,1,0,0,0],
+ [0,0,0,1,7,8,9,1,1,9,8,7,1,0,0,0],
+ [0,0,0,1,7,8,9,0,0,9,8,7,1,0,0,0],
+ [0,0,0,1,7,8,9,0,0,9,8,7,1,0,0,0],
+ [0,0,0,1,7,8,7,0,0,7,8,7,1,0,0,0],
+ [0,0,0,1,7,7,7,0,0,7,7,7,1,0,0,0],
+ [0,0,0,1,13,17,13,0,0,13,17,13,1,0,0,0],
+ [0,0,1,17,17,18,17,0,0,17,18,17,17,1,0,0],
+ [0,0,1,17,13,17,17,0,0,17,17,13,17,1,0,0],
+ [0,0,0,1,1,1,1,0,0,1,1,1,1,0,0,0],
+];
+
+// ============================================================
+// STYLE D: Larger detailed sprite (20x32) with Sierra VGA palette + dithering
+// ============================================================
+const PAUL_D_PALETTE = [
+  null,
+  '#08080f',     // 1 outline
+  '#2a180c',     // 2 hair dark
+  '#4a3020',     // 3 hair mid
+  '#654830',     // 4 hair light
+  '#dba67a',     // 5 skin mid
+  '#c49060',     // 6 skin shadow
+  '#ecd4a8',     // 7 skin highlight
+  '#f0dcc0',     // 8 skin brightest
+  '#0d1520',     // 9 uniform darkest
+  '#152035',     // 10 uniform dark
+  '#1c2b48',     // 11 uniform mid
+  '#243860',     // 12 uniform light
+  '#2e4878',     // 13 uniform highlight
+  '#385890',     // 14 uniform brightest
+  '#a8a8a8',     // 15 silver
+  '#d0d0d0',     // 16 silver bright
+  '#cc3030',     // 17 tie
+  '#0a0a0a',     // 18 black
+  '#1a1a1a',     // 19 dark grey
+  '#333',        // 20 grey
+  '#f8f8f0',     // 21 white
+  '#b08830',     // 22 gold (buttons)
+  '#2a2a30',     // 23 shoe mid
+  '#181820',     // 24 shoe dark
+];
+
+const PAUL_D = [
+ [0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0],
+ [0,0,0,0,0,0,1,3,2,2,2,2,3,1,0,0,0,0,0,0],
+ [0,0,0,0,0,1,3,2,2,3,3,2,2,3,1,0,0,0,0,0],
+ [0,0,0,0,0,1,2,3,2,2,2,2,3,2,1,0,0,0,0,0],
+ [0,0,0,0,0,1,4,3,3,4,4,3,3,4,1,0,0,0,0,0],
+ [0,0,0,0,0,1,6,5,7,5,5,7,5,6,1,0,0,0,0,0],
+ [0,0,0,0,0,1,6,5,18,5,5,18,5,6,1,0,0,0,0],
+ [0,0,0,0,0,1,6,5,5,5,5,5,5,6,1,0,0,0,0,0],
+ [0,0,0,0,0,0,1,6,5,6,6,5,6,1,0,0,0,0,0,0],
+ [0,0,0,0,0,0,1,6,5,5,5,5,6,1,0,0,0,0,0,0],
+ [0,0,0,0,0,0,0,1,6,5,5,6,1,0,0,0,0,0,0,0],
+ [0,0,0,1,1,14,13,12,11,11,11,11,12,13,14,1,1,0,0,0],
+ [0,0,1,13,12,12,11,16,11,17,11,11,11,12,12,13,1,0,0,0],
+ [0,0,1,12,11,11,11,15,11,17,11,11,11,11,11,12,1,0,0,0],
+ [0,1,13,12,11,10,10,10,10,17,10,10,10,11,12,13,1,0,0,0],
+ [0,1,12,11,10,10,10,10,10,17,10,10,10,10,11,12,1,0,0,0],
+ [0,1,6,11,10,10,10,10,10,10,10,10,10,10,11,6,1,0,0,0],
+ [0,0,1,18,18,22,18,18,18,18,18,18,22,18,18,1,0,0,0,0],
+ [0,0,0,1,9,10,11,11,9,9,11,11,10,9,1,0,0,0,0,0],
+ [0,0,0,1,9,10,11,11,9,9,11,11,10,9,1,0,0,0,0,0],
+ [0,0,0,1,9,10,11,12,1,1,12,11,10,9,1,0,0,0,0,0],
+ [0,0,0,1,9,10,11,12,0,0,12,11,10,9,1,0,0,0,0,0],
+ [0,0,0,1,9,10,11,1,0,0,1,11,10,9,1,0,0,0,0,0],
+ [0,0,0,1,9,10,11,0,0,0,0,11,10,9,1,0,0,0,0,0],
+ [0,0,0,1,9,10,10,0,0,0,0,10,10,9,1,0,0,0,0,0],
+ [0,0,0,1,9,9,9,0,0,0,0,9,9,9,1,0,0,0,0,0],
+ [0,0,0,1,18,24,18,0,0,0,0,18,24,18,1,0,0,0,0,0],
+ [0,0,1,24,23,24,24,1,0,1,24,24,23,24,1,0,0,0,0,0],
+ [0,0,1,24,19,24,24,1,0,1,24,24,19,24,1,0,0,0,0,0],
+ [0,0,1,24,24,24,24,1,0,1,24,24,24,24,1,0,0,0,0,0],
+ [0,0,0,1,1,1,1,0,0,0,0,1,1,1,1,0,0,0,0,0],
+];
+
+// ============================================================
+// PONY SPRITES for each style
+// ============================================================
+const PONY_PALETTE = [
+  null,
+  '#1a1008',     // 1 outline
+  '#b8860b',     // 2 body
+  '#d4a020',     // 3 body light
+  '#8a6a08',     // 4 body shadow
+  '#4a2a10',     // 5 mane dark
+  '#6a3a18',     // 6 mane
+  '#111',        // 7 eye
+  '#e8c870',     // 8 belly highlight
+  '#333',        // 9 hoof
+  '#dba67a',     // 10 muzzle
+];
+
+const PONY_SPRITE = [
+ [0,0,0,0,0,0,0,0,0,5,6,5,0,0,0,0,0,0,0,0,0,0,0,0],
+ [0,0,0,1,1,0,0,0,5,6,5,6,5,0,0,0,0,0,0,0,0,0,0,0],
+ [0,0,1,2,2,1,0,0,1,5,6,5,1,0,0,0,0,0,0,0,0,0,0,0],
+ [0,1,3,2,2,3,1,1,1,1,5,1,1,1,0,0,0,0,0,0,0,0,0,0],
+ [0,1,3,7,2,2,1,3,2,2,2,2,2,2,1,1,0,0,0,0,0,0,0,0],
+ [0,1,3,2,2,2,1,3,3,2,2,2,2,2,3,3,1,1,0,0,0,0,0,0],
+ [0,0,1,10,3,2,1,2,3,3,3,3,3,3,3,2,2,2,1,1,0,0,0,0],
+ [0,0,0,1,1,1,0,1,2,2,8,8,2,2,2,2,2,2,4,1,5,6,5,0],
+ [0,0,0,0,0,0,0,1,4,2,8,8,2,2,2,2,4,4,4,1,5,6,5,0],
+ [0,0,0,0,0,0,0,0,1,4,4,2,2,2,4,4,4,1,1,1,0,5,0,0],
+ [0,0,0,0,0,0,0,0,1,4,1,4,4,1,4,1,1,0,0,0,0,0,0,0],
+ [0,0,0,0,0,0,0,0,1,4,1,4,4,1,4,1,0,0,0,0,0,0,0,0],
+ [0,0,0,0,0,0,0,0,1,4,1,4,4,1,4,1,0,0,0,0,0,0,0,0],
+ [0,0,0,0,0,0,0,0,1,9,1,0,0,1,9,1,0,0,0,0,0,0,0,0],
+ [0,0,0,0,0,0,0,1,9,9,1,0,0,1,9,9,1,0,0,0,0,0,0,0],
+];
+
+// ============================================================
+// BACKGROUND STYLES
+// ============================================================
+
+// Dithering helper
+function dither(ctx, x, y, w, h, c1, c2, pattern) {
+  // pattern: 0=solid c1, 1=25%, 2=50% checker, 3=75%, 4=solid c2
+  for(let py=0;py<h;py++) {
+    for(let px=0;px<w;px++) {
+      let useC2 = false;
+      if(pattern===1) useC2 = (px+py)%4===0;
+      else if(pattern===2) useC2 = (px+py)%2===0;
+      else if(pattern===3) useC2 = (px+py)%4!==0;
+      else if(pattern===4) useC2 = true;
+      ctx.fillStyle = useC2 ? c2 : c1;
+      ctx.fillRect(x+px, y+py, 1, 1);
+    }
+  }
+}
+
+// Sierra-style dithered gradient
+function sierraGradient(ctx, x, y, w, h, colors) {
+  // colors is array of {color, ditherWith} pairs
+  const bandH = Math.floor(h / colors.length);
+  for(let i=0;i<colors.length;i++) {
+    const c = colors[i];
+    if(c.dither) {
+      dither(ctx, x, y+i*bandH, w, bandH, c.color, c.dither, 2);
+    } else {
+      R(ctx, x, y+i*bandH, w, bandH, c.color);
+    }
+  }
+}
+
+function drawStationBG_A(ctx) {
+  // Current crude style
+  R(ctx,0,0,120,80,'#c4a882');
+  R(ctx,0,0,120,8,'#d0d0c8');
+  for(let tx=0;tx<120;tx+=15) for(let ty=55;ty<80;ty+=12) {
+    R(ctx,tx,ty,14,11,'#7a7a72');R(ctx,tx,ty,14,1,'#9a9a90');
+  }
+  R(ctx,8,15,40,35,'#1a2040');R(ctx,8,15,40,2,'#5a4a32');R(ctx,8,15,2,35,'#5a4a32');R(ctx,46,15,2,35,'#5a4a32');
+  R(ctx,27,15,2,35,'#5a4a32');R(ctx,8,32,40,2,'#5a4a32');
+  R(ctx,55,20,25,12,'#a08050');R(ctx,55,20,25,1,'#6a5030');
+  R(ctx,60,23,8,6,'#fff');R(ctx,70,24,7,5,'#ffa');
+  R(ctx,10,50,100,3,'#5a3a1a');R(ctx,10,53,100,12,'#4a2a0a');
+  R(ctx,20,44,12,7,'#222');R(ctx,40,46,5,5,'#fff');
+}
+
+function drawStationBG_B(ctx) {
+  // Dithered Sierra style
+  sierraGradient(ctx, 0,0,120,8, [
+    {color:'#d8d8d0'},{color:'#d0d0c8'}
+  ]);
+  // Wall with subtle dithered shading
+  R(ctx,0,8,120,46,'#c4a882');
+  dither(ctx,0,8,120,3,'#c4a882','#b8a078',1); // shadow under ceiling
+  dither(ctx,0,50,120,4,'#c4a882','#b09870',2); // shadow above desk
+
+  // Floor with dithered tiles
+  for(let tx=0;tx<120;tx+=15) for(let ty=56;ty<80;ty+=12) {
+    R(ctx,tx,ty,14,11,'#7a7a72');
+    dither(ctx,tx,ty,14,2,'#9a9a90','#7a7a72',2);
+    dither(ctx,tx,ty+9,14,2,'#6a6a64','#7a7a72',2);
+  }
+
+  // Window with dithered pre-dawn sky
+  R(ctx,8,14,40,36,'#5a4a32');
+  sierraGradient(ctx,10,16,17,32, [
+    {color:'#0a0a20'},{color:'#0a0a20',dither:'#141430'},
+    {color:'#141430'},{color:'#141430',dither:'#1e2040'},
+    {color:'#1e2040'},{color:'#1e2040',dither:'#283050'},
+    {color:'#283050'},{color:'#283050',dither:'#324060'},
+  ]);
+  sierraGradient(ctx,29,16,17,32, [
+    {color:'#0a0a20'},{color:'#0a0a20',dither:'#141430'},
+    {color:'#141430'},{color:'#141430',dither:'#1e2040'},
+    {color:'#1e2040'},{color:'#1e2040',dither:'#283050'},
+    {color:'#283050'},{color:'#283050',dither:'#324060'},
+  ]);
+  R(ctx,27,16,2,32,'#5a4a32');
+  R(ctx,10,31,36,2,'#5a4a32');
+  // Stars
+  R(ctx,15,20,1,1,'#aaa');R(ctx,35,22,1,1,'#888');R(ctx,22,38,1,1,'#777');
+
+  // Notice board
+  R(ctx,55,18,28,14,'#987040');
+  dither(ctx,55,18,28,2,'#a88050','#987040',2);
+  R(ctx,55,18,28,1,'#6a5030');R(ctx,55,18,1,14,'#6a5030');
+  R(ctx,82,18,1,14,'#6a5030');R(ctx,55,31,28,1,'#6a5030');
+  R(ctx,58,21,10,5,'#eee');R(ctx,71,22,8,4,'#ffa');
+  R(ctx,62,22,1,1,'#c00');R(ctx,74,23,1,1,'#00c');
+
+  // Desk with wood grain dither
+  R(ctx,5,53,110,3,'#6a4020');
+  dither(ctx,5,53,110,1,'#7a5030','#6a4020',2);
+  R(ctx,5,56,110,14,'#4a2808');
+  dither(ctx,5,56,110,2,'#5a3818','#4a2808',1);
+
+  // Phone
+  R(ctx,18,47,14,7,'#1a1a1a');R(ctx,20,45,10,3,'#222');
+  R(ctx,17,44,5,3,'#1a1a1a');R(ctx,28,44,5,3,'#1a1a1a');
+  R(ctx,24,49,2,2,'#660000');
+
+  // Coffee
+  R(ctx,42,48,5,5,'#e8e8e8');R(ctx,46,50,2,2,'#e8e8e8');
+  R(ctx,43,49,3,3,'#5a2a0a');
+
+  // Skirting
+  R(ctx,0,54,120,2,'#6a5a42');
+}
+
+function drawMotorwayBG_A(ctx) {
+  // Current crude style
+  for(let y=0;y<30;y++) {
+    const t=y/30;
+    R(ctx,0,y,160,1,`rgb(${26+t*170},${26+t*70},${58+t*20})`);
+  }
+  for(let tx=0;tx<160;tx+=6) {
+    const th=2+Math.sin(tx*0.3)*1.5;
+    R(ctx,tx,28-th,6,th+3,'#1a3a1a');
+  }
+  R(ctx,0,31,50,30,'#2a5a1a');
+  R(ctx,40,31,120,30,'#4a4a4a');
+  for(let ly=35;ly<60;ly+=8) { R(ctx,75,ly,2,4,'#fff'); R(ctx,110,ly,2,4,'#fff'); }
+  R(ctx,42,31,2,30,'#fff');
+  R(ctx,55,38,20,8,'#fff');R(ctx,57,39,6,6,'#3a5a8a');R(ctx,67,39,6,6,'#3a5a8a');
+}
+
+function drawMotorwayBG_B(ctx) {
+  // Sierra VGA dithered style
+  sierraGradient(ctx,0,0,160,32,[
+    {color:'#0a0818'},{color:'#0a0818',dither:'#141028'},
+    {color:'#141028'},{color:'#141028',dither:'#201838'},
+    {color:'#201838'},{color:'#201838',dither:'#302040'},
+    {color:'#302040'},{color:'#302040',dither:'#503020'},
+    {color:'#503020'},{color:'#503020',dither:'#804828'},
+    {color:'#804828'},{color:'#804828',dither:'#b06030'},
+    {color:'#b06030'},{color:'#b06030',dither:'#d08040'},
+    {color:'#d08040'},
+  ]);
+  // Dawn glow on horizon
+  dither(ctx,0,28,160,4,'#d08040','#e0a050',2);
+
+  // Tree line silhouette (organic shapes)
+  for(let tx=0;tx<160;tx++) {
+    const th=Math.floor(3+Math.sin(tx*0.4)*2+Math.sin(tx*0.15)*3+Math.cos(tx*0.8)*1);
+    for(let ty=0;ty<th+2;ty++) {
+      const shade = ty<th-1 ? '#0a1a08' : '#142a10';
+      R(ctx,tx,30-th+ty,1,1,shade);
+    }
+  }
+
+  // Green verge
+  R(ctx,0,32,45,28,'#1a3a10');
+  dither(ctx,0,32,45,4,'#2a4a18','#1a3a10',2);
+  dither(ctx,0,55,45,5,'#1a3a10','#142a0a',1);
+  // Grass detail
+  for(let gx=2;gx<43;gx+=3) {
+    R(ctx,gx,32+Math.floor(Math.random()*20),1,2,'#245a18');
+  }
+
+  // Fence
+  for(let fx=5;fx<42;fx+=10){R(ctx,fx,36,1,14,'#5a4020');}
+  R(ctx,5,40,35,1,'#5a4020');R(ctx,5,46,35,1,'#5a4020');
+
+  // Road
+  R(ctx,42,32,118,28,'#3a3a3a');
+  dither(ctx,42,32,118,3,'#4a4a4a','#3a3a3a',2);
+  // Edge line
+  R(ctx,43,32,1,28,'#ddd');
+  // Lane dashes
+  for(let ly=34;ly<58;ly+=8){R(ctx,78,ly,1,4,'#ccc');R(ctx,113,ly,1,4,'#ccc');}
+  // Barrier
+  for(let bx=148;bx<160;bx+=8){R(ctx,bx,38,2,22,'#888');}
+  R(ctx,148,44,12,2,'#aaa');R(ctx,148,52,12,2,'#aaa');
+
+  // Police car (detailed)
+  R(ctx,52,42,22,9,'#e0e0e0');
+  dither(ctx,52,42,22,2,'#f0f0f0','#e0e0e0',2);
+  R(ctx,56,43,5,6,'#2a4a7a');R(ctx,64,43,5,6,'#2a4a7a');
+  R(ctx,52,47,22,1,'#1a2a6a');
+  R(ctx,54,42,3,2,'#1a1a1a');R(ctx,66,42,3,2,'#1a1a1a');
+  R(ctx,54,50,3,2,'#1a1a1a');R(ctx,66,50,3,2,'#1a1a1a');
+  R(ctx,60,42,2,1,'#3333dd');R(ctx,63,42,2,1,'#3333dd');
+
+  // Road surface texture
+  for(let rx=45;rx<145;rx+=7) {
+    dither(ctx,rx,50+Math.floor(Math.random()*6),3,1,'#3a3a3a','#333333',2);
+  }
+}
+
+// ============================================================
+// RENDER ALL PANELS
+// ============================================================
+
+const charRow = document.getElementById('charRow');
+const bgRow = document.getElementById('bgRow');
+const sceneRow = document.getElementById('sceneRow');
+const SCALE = 3;
+
+// --- Character panels ---
+const chW=40, chH=40;
+
+// Style A
+{
+  const c=makePanel(charRow,'A: Rectangle stacking (current)',chW,chH,SCALE*2);
+  R(c,0,0,chW,chH,'#c4a882');
+  drawPaulA(c, 20, 36);
+}
+// Style B
+{
+  const c=makePanel(charRow,'B: Pixel-art sprite (no outline)',chW,chH,SCALE*2);
+  R(c,0,0,chW,chH,'#c4a882');
+  drawPixelSprite(c, PAUL_B, PAUL_B_PALETTE, 12, 8);
+}
+// Style C
+{
+  const c=makePanel(charRow,'C: Pixel-art sprite (outlined)',chW,chH,SCALE*2);
+  R(c,0,0,chW,chH,'#c4a882');
+  drawPixelSprite(c, PAUL_C, PAUL_C_PALETTE, 12, 8);
+}
+// Style D
+{
+  const c=makePanel(charRow,'D: Larger detailed sprite (20px wide)',48,44,SCALE*2);
+  R(c,0,0,48,44,`#c4a882`);
+  drawPixelSprite(c, PAUL_D, PAUL_D_PALETTE, 14, 7);
+}
+
+// --- Pony for reference ---
+{
+  const c=makePanel(charRow,'Pony (pixel-art)',40,26,SCALE*2);
+  R(c,0,0,40,26,'#4a4a4a');
+  R(c,0,24,40,2,'#3a3a3a');
+  for(let lx=0;lx<40;lx+=8) R(c,lx,22,4,1,'#ccc');
+  drawPixelSprite(c, PONY_SPRITE, PONY_PALETTE, 8, 7);
+}
+
+// --- Background panels ---
+const bgW=120, bgH=80;
+
+{
+  const c=makePanel(bgRow,'A: Flat rectangles (current)',bgW,bgH,SCALE);
+  drawStationBG_A(c);
+}
+{
+  const c=makePanel(bgRow,'B: Sierra VGA dithered',bgW,bgH,SCALE);
+  drawStationBG_B(c);
+}
+
+// --- Motorway scene panels ---
+const scW=160, scH=60;
+{
+  const c=makePanel(sceneRow,'A: Flat gradients (current)',scW,scH,SCALE);
+  drawMotorwayBG_A(c);
+}
+{
+  const c=makePanel(sceneRow,'B: Sierra VGA dithered dawn',scW,scH,SCALE);
+  drawMotorwayBG_B(c);
+}
+
+</script>
+</body>
+</html>
