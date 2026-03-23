@@ -691,12 +691,12 @@ function getHotspots() {
         use:()=>showText("You can't turn back time, much as you'd like to."),
         talk:()=>showText("\"Come on, come on...\" The hands don't move any faster."),
       },
-      { id:'noticeboard', label:'Notice Board', x:248, y:43, w:58, h:48, sx:270, sy:155,
+      { id:'noticeboard', label:'Notice Board', x:248, y:43, w:38, h:48, sx:270, sy:155,
         look:()=>showText("Various notices: a charity fun run, a missing cat poster, and a health & safety memo about proper kettle usage."),
         use:()=>showText("Nothing useful to take from here."),
         talk:()=>showText("The notice board has nothing to say."),
       },
-      { id:'rope', label:'Rope', x:288, y:68, w:16, h:25, sx:296, sy:155,
+      { id:'rope', label:'Rope', x:286, y:62, w:22, h:30, sx:296, sy:155,
         look:()=>hasItem('rope')?showText("Just an empty coat hook."):showText("A sturdy rope hanging from the coat rack. Looks like it could be useful for... rounding things up."),
         use:()=>{
           if(hasItem('rope')) return showText("You already took the rope.");
