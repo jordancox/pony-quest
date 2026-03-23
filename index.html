@@ -1,0 +1,1277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pony Quest: M25 Incident</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;display:flex;justify-content:center;align-items:center;height:100vh;overflow:hidden}
+canvas{image-rendering:pixelated;image-rendering:crisp-edges;cursor:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+
+// ===== CONSTANTS =====
+const W = 320, H = 200;
+const VERB_H = 18;
+const INV_H = 24;
+const GAME_TOP = VERB_H;
+const GAME_BOT = H - INV_H;
+const WALK_SPEED = 1.0;
+
+// ===== CANVAS SETUP =====
+const display = document.getElementById('c');
+const dctx = display.getContext('2d');
+const buf = document.createElement('canvas');
+buf.width = W; buf.height = H;
+const ctx = buf.getContext('2d');
+
+function resize() {
+  const s = Math.floor(Math.min(window.innerWidth / W, window.innerHeight / H));
+  display.width = W * s; display.height = H * s;
+  dctx.imageSmoothingEnabled = false;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ===== GAME STATE =====
+const G = {
+  screen: 'title',
+  scene: 1,
+  verb: 'walk',
+  inventory: [],
+  selItem: null,
+  flags: {},
+  player: { x: 160, y: 150, tx: 160, ty: 150, dir: 0, frame: 0, walking: false, visible: true, action: null },
+  pony: { x: 200, y: 115, tx: 200, ty: 115, frame: 0, timer: 0, state: 'trot', eating: false },
+  textBox: null,
+  dialog: null,
+  walkCB: null,
+  transition: 0,
+  nextScene: 0,
+  tick: 0,
+  journChoices: [],
+  hoverHotspot: null,
+};
+
+// ===== INPUT =====
+let mx = 0, my = 0, clicked = false, rclicked = false;
+display.addEventListener('mousemove', e => {
+  const r = display.getBoundingClientRect();
+  mx = Math.floor((e.clientX - r.left) / (display.width / W));
+  my = Math.floor((e.clientY - r.top) / (display.height / H));
+});
+display.addEventListener('click', () => { clicked = true; });
+display.addEventListener('contextmenu', e => { e.preventDefault(); rclicked = true; });
+
+// ===== HELPERS =====
+function R(x,y,w,h,c) { ctx.fillStyle=c; ctx.fillRect(x,y,w,h); }
+function vGrad(x,y,w,h,c1,c2) {
+  const g=ctx.createLinearGradient(x,y,x,y+h);
+  g.addColorStop(0,c1); g.addColorStop(1,c2);
+  ctx.fillStyle=g; ctx.fillRect(x,y,w,h);
+}
+function dist(a,b,c,d) { return Math.sqrt((a-c)**2+(b-d)**2); }
+function wrapText(t, max) {
+  const words=t.split(' '), lines=[];
+  let cur='';
+  for(const w of words) {
+    if((cur+' '+w).trim().length>max) { lines.push(cur.trim()); cur=w; }
+    else cur+=' '+w;
+  }
+  if(cur.trim()) lines.push(cur.trim());
+  return lines;
+}
+
+// ===== TEXT BOX =====
+function showText(t, cb) { G.textBox={text:t, cb: cb||null}; }
+function drawTextBox() {
+  if(!G.textBox) return;
+  const lines=wrapText(G.textBox.text, 36);
+  const bh=lines.length*10+14, bw=270, bx=(W-bw)/2, by=30;
+  R(bx,by,bw,bh,'#000050'); R(bx+1,by+1,bw-2,bh-2,'#0000a0');
+  R(bx+2,by+2,bw-4,1,'#4444dd'); R(bx+2,by+2,1,bh-4,'#4444dd');
+  R(bx+bw-3,by+2,1,bh-4,'#000030'); R(bx+2,by+bh-3,bw-4,1,'#000030');
+  ctx.font='8px monospace'; ctx.fillStyle='#fff';
+  for(let i=0;i<lines.length;i++) ctx.fillText(lines[i], bx+8, by+12+i*10);
+}
+
+// ===== DIALOG CHOICES =====
+function showChoices(prompt, choices, cb) {
+  G.dialog={prompt, choices, hover:-1, cb};
+}
+function drawChoiceBox() {
+  if(!G.dialog) return;
+  const d=G.dialog;
+  const totalLines = 1 + 1 + d.choices.length;
+  const bh=totalLines*11+14, bw=280, bx=(W-bw)/2, by=25;
+  R(bx,by,bw,bh,'#000050'); R(bx+1,by+1,bw-2,bh-2,'#0000a0');
+  R(bx+2,by+2,bw-4,1,'#4444dd'); R(bx+2,by+2,1,bh-4,'#4444dd');
+  ctx.font='8px monospace';
+  ctx.fillStyle='#fff';
+  ctx.fillText(d.prompt, bx+8, by+12);
+  d.hover=-1;
+  for(let i=0;i<d.choices.length;i++) {
+    const cy=by+12+11*(i+2);
+    const hovering = mx>bx+6 && mx<bx+bw-6 && my>=cy-8 && my<cy+3;
+    if(hovering) d.hover=i;
+    ctx.fillStyle=hovering?'#ffff00':'#cccccc';
+    ctx.fillText((hovering?'> ':'  ')+d.choices[i].label, bx+8, cy);
+  }
+}
+
+// ===== INVENTORY =====
+function addItem(id, name, desc) {
+  if(!G.inventory.find(i=>i.id===id)) G.inventory.push({id,name,desc});
+}
+function hasItem(id) { return G.inventory.some(i=>i.id===id); }
+function removeItem(id) { G.inventory=G.inventory.filter(i=>i.id!==id); }
+
+function drawInventory() {
+  R(0,GAME_BOT,W,INV_H,'#1a1a2a');
+  R(0,GAME_BOT,W,1,'#333355');
+  ctx.font='7px monospace';
+  for(let i=0;i<G.inventory.length;i++) {
+    const ix=8+i*50, iy=GAME_BOT+3;
+    const sel=G.selItem&&G.selItem.id===G.inventory[i].id;
+    R(ix,iy,46,18, sel?'#334':'#222238');
+    R(ix,iy,46,1,'#444466');
+    R(ix,iy,1,18,'#444466');
+    // draw item icon
+    drawItemIcon(G.inventory[i].id, ix+2, iy+1);
+    ctx.fillStyle=sel?'#ff0':'#aaa';
+    ctx.fillText(G.inventory[i].name, ix+18, iy+12);
+  }
+}
+
+function drawItemIcon(id, x, y) {
+  switch(id) {
+    case 'rope':
+      R(x+2,y+2,12,12,'#1a1a2a');
+      ctx.strokeStyle='#a08040';ctx.lineWidth=2;
+      ctx.beginPath();ctx.arc(x+8,y+8,5,0,Math.PI*1.7);ctx.stroke();
+      break;
+    case 'apple':
+      R(x+5,y+4,6,8,'#cc2222');
+      R(x+7,y+2,2,3,'#228822');
+      break;
+    case 'auth':
+      R(x+3,y+2,10,12,'#ddd');
+      R(x+5,y+5,6,1,'#666');R(x+5,y+7,6,1,'#666');R(x+5,y+9,4,1,'#666');
+      break;
+  }
+}
+
+function handleInvClick() {
+  for(let i=0;i<G.inventory.length;i++) {
+    const ix=8+i*50;
+    if(mx>=ix && mx<ix+46 && my>=GAME_BOT+3 && my<GAME_BOT+21) {
+      if(G.selItem && G.selItem.id===G.inventory[i].id) { G.selItem=null; }
+      else { G.selItem=G.inventory[i]; G.verb='use'; }
+      return true;
+    }
+  }
+  return false;
+}
+
+// ===== VERB BAR =====
+const VERBS = ['walk','look','talk','use'];
+const VERB_LABELS = ['Walk','Look','Talk','Use'];
+
+function drawVerbBar() {
+  R(0,0,W,VERB_H,'#1a1a2a');
+  R(0,VERB_H-1,W,1,'#333355');
+  for(let i=0;i<4;i++) {
+    const vx=4+i*34, vy=2, vw=30, vh=12;
+    const sel=G.verb===VERBS[i]&&!G.selItem;
+    R(vx,vy,vw,vh,sel?'#334466':'#222238');
+    R(vx,vy,vw,1,'#444488');R(vx,vy,1,vh,'#444488');
+    R(vx+vw-1,vy,1,vh,'#111128');R(vx,vy+vh-1,vw,1,'#111128');
+    drawVerbIcon(i, vx+2, vy+1);
+    ctx.font='6px monospace';
+    ctx.fillStyle=sel?'#fff':'#888';
+    ctx.fillText(VERB_LABELS[i], vx+12, vy+9);
+  }
+  // Status text
+  ctx.font='7px monospace';ctx.fillStyle='#8888aa';
+  const status=getStatusText();
+  if(status) ctx.fillText(status, 144, 12);
+}
+
+function drawVerbIcon(i, x, y) {
+  switch(i) {
+    case 0: // walk - boot
+      R(x+2,y+1,4,6,'#888');R(x+1,y+7,6,3,'#888');
+      break;
+    case 1: // look - eye
+      R(x+1,y+3,8,4,'#fff');R(x+3,y+4,4,2,'#44f');R(x+4,y+4,2,2,'#000');
+      break;
+    case 2: // talk - speech bubble
+      R(x+1,y+1,7,5,'#fff');R(x+2,y+6,2,2,'#fff');
+      break;
+    case 3: // use - hand
+      R(x+3,y+1,4,3,'#dba67a');R(x+1,y+4,8,4,'#dba67a');R(x+2,y+8,6,2,'#dba67a');
+      break;
+  }
+}
+
+function handleVerbClick() {
+  for(let i=0;i<4;i++) {
+    const vx=4+i*34;
+    if(mx>=vx && mx<vx+30 && my>=2 && my<14) {
+      G.verb=VERBS[i]; G.selItem=null;
+      return true;
+    }
+  }
+  return false;
+}
+
+function getStatusText() {
+  const h=G.hoverHotspot;
+  if(!h) return '';
+  if(G.selItem) return 'Use '+G.selItem.name+' on '+h.label;
+  return VERB_LABELS[VERBS.indexOf(G.verb)]+' '+h.label;
+}
+
+// ===== CURSOR =====
+function drawCursor() {
+  if(G.selItem) {
+    R(mx,my,2,2,'#ff0');
+    ctx.font='6px monospace';ctx.fillStyle='#ff0';
+    ctx.fillText(G.selItem.name, mx+4, my+4);
+    return;
+  }
+  switch(G.verb) {
+    case 'walk':
+      R(mx,my,2,8,'#0f0');R(mx,my+6,6,2,'#0f0');
+      break;
+    case 'look':
+      ctx.strokeStyle='#fff';ctx.lineWidth=1;
+      ctx.beginPath();ctx.arc(mx+4,my+4,3,0,Math.PI*2);ctx.stroke();
+      R(mx+6,my+6,3,1,'#fff');
+      break;
+    case 'talk':
+      R(mx,my,7,5,'#fff');R(mx+1,my+5,2,2,'#fff');
+      break;
+    case 'use':
+      R(mx+1,my,3,2,'#dba67a');R(mx,my+2,5,3,'#dba67a');
+      break;
+  }
+}
+
+// ===== SPRITES =====
+function drawPaul(px, py, dir, frame, action) {
+  // px, py = bottom center. Sprite ~12x24
+  const x=Math.floor(px-6), y=Math.floor(py-24);
+  // Shadow
+  ctx.fillStyle='rgba(0,0,0,0.2)';
+  ctx.fillRect(x+1,py-1,10,2);
+  // Hair
+  R(x+2,y,8,3,'#3a2a1a');
+  // Face
+  R(x+2,y+3,8,5,'#dba67a');
+  // Eyes (if facing forward or left/right)
+  R(x+4,y+5,1,1,'#222');R(x+7,y+5,1,1,'#222');
+  // Body - dark blue police uniform
+  R(x+1,y+8,10,8,'#1a2744');
+  // Epaulettes
+  R(x+1,y+8,2,1,'#2a3a5a');R(x+9,y+8,2,1,'#2a3a5a');
+  // Badge
+  R(x+4,y+9,1,1,'#ccc');
+  // Belt
+  R(x+1,y+15,10,1,'#111');
+  // Legs
+  const walk = G.player.walking;
+  const f = Math.floor(frame)%4;
+  let ll=0, rl=0;
+  if(walk) {
+    if(f===0){ll=-1;rl=1;}
+    else if(f===2){ll=1;rl=-1;}
+  }
+  R(x+2+ll,y+16,3,6,'#1a2744');
+  R(x+7+rl,y+16,3,6,'#1a2744');
+  // Shoes
+  R(x+2+ll,y+22,3,2,'#111');
+  R(x+7+rl,y+22,3,2,'#111');
+  // Arms
+  if(action==='phone') {
+    R(x-1,y+8,2,6,'#1a2744');
+    R(x-1,y+8,2,2,'#dba67a'); // hand at ear
+    R(x+11,y+10,2,5,'#1a2744');
+  } else if(action==='calm') {
+    R(x+11,y+9,4,2,'#1a2744');R(x+14,y+9,2,2,'#dba67a'); // arm out
+    R(x-1,y+10,2,5,'#1a2744');
+  } else {
+    // Normal arms at sides
+    let al=0, ar=0;
+    if(walk){if(f===0){al=1;ar=-1;}else if(f===2){al=-1;ar=1;}}
+    R(x,y+9+al,2,5,'#1a2744');
+    R(x+10,y+9+ar,2,5,'#1a2744');
+  }
+}
+
+function drawPonySprite(px, py, frame, roped) {
+  const x=Math.floor(px-10), y=Math.floor(py-14);
+  // Shadow
+  ctx.fillStyle='rgba(0,0,0,0.15)';ctx.fillRect(x+2,py-1,16,2);
+  // Body
+  R(x+4,y+3,12,8,'#b8860b');
+  // Head
+  R(x,y+1,6,6,'#b8860b');
+  // Mane
+  R(x+4,y,4,4,'#5a3a1a');R(x+5,y-1,3,2,'#5a3a1a');
+  // Ear
+  R(x+1,y-1,2,2,'#b8860b');
+  // Eye
+  R(x+2,y+2,1,1,'#111');
+  // Mouth
+  R(x,y+5,1,1,'#8a6a0a');
+  // Tail
+  R(x+15,y+2,3,4,'#5a3a1a');
+  // Legs (animated)
+  const f=Math.floor(frame)%4;
+  let fl=0,bl=0;
+  if(G.pony.state==='trot'||G.pony.state==='approach') {
+    if(f<2){fl=-1;bl=1;}else{fl=1;bl=-1;}
+  }
+  R(x+5+fl,y+11,2,4,'#8a6a0a');
+  R(x+8+bl,y+11,2,4,'#8a6a0a');
+  R(x+12+fl,y+11,2,4,'#8a6a0a');
+  R(x+14+bl,y+11,2,4,'#8a6a0a');
+  // Hooves
+  R(x+5+fl,y+14,2,1,'#333');R(x+8+bl,y+14,2,1,'#333');
+  R(x+12+fl,y+14,2,1,'#333');R(x+14+bl,y+14,2,1,'#333');
+  // Rope if roped
+  if(roped) {
+    ctx.strokeStyle='#a08040';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(x+3,y+4);ctx.lineTo(G.player.x, G.player.y-12);ctx.stroke();
+  }
+}
+
+function drawJournalist(jx, jy) {
+  const x=Math.floor(jx-6), y=Math.floor(jy-24);
+  ctx.fillStyle='rgba(0,0,0,0.2)';ctx.fillRect(x+1,jy-1,10,2);
+  // Hair (blonde)
+  R(x+2,y,8,4,'#d4a030');
+  // Face
+  R(x+2,y+4,8,4,'#dba67a');
+  R(x+4,y+5,1,1,'#222');R(x+7,y+5,1,1,'#222');
+  // Body (green jacket - Horse & Hound journalist)
+  R(x+1,y+8,10,8,'#2a6a2a');
+  // Notepad
+  R(x+10,y+10,4,5,'#fff');R(x+11,y+11,2,1,'#666');R(x+11,y+13,2,1,'#666');
+  // Legs (khaki)
+  R(x+2,y+16,3,6,'#8a7a5a');R(x+7,y+16,3,6,'#8a7a5a');
+  // Shoes
+  R(x+2,y+22,3,2,'#4a3a2a');R(x+7,y+22,3,2,'#4a3a2a');
+  // Arms
+  R(x,y+9,2,5,'#2a6a2a');R(x+10,y+9,2,3,'#2a6a2a');
+}
+
+// ===== BACKGROUNDS =====
+function drawStationBG() {
+  // Floor
+  R(0,VERB_H,W,GAME_BOT-VERB_H,'#8a8a80');
+  // Floor tiles
+  for(let tx=0;tx<W;tx+=20) {
+    for(let ty=145;ty<GAME_BOT;ty+=15) {
+      R(tx,ty,19,14,'#7a7a72');
+      R(tx,ty,19,1,'#9a9a90');R(tx,ty,1,14,'#9a9a90');
+    }
+  }
+  // Back wall
+  R(0,VERB_H,W,130-VERB_H,'#c4a882');
+  // Wall shadow at bottom
+  R(0,125,W,5,'#b09872');
+  // Ceiling
+  R(0,VERB_H,W,15,'#d0d0c8');
+  // Fluorescent light
+  R(100,VERB_H+4,120,3,'#ffffee');R(100,VERB_H+3,120,1,'#fff');
+  // Skirting board
+  R(0,128,W,2,'#6a5a42');
+
+  // Window (left side)
+  R(15,40,60,75,'#1a2040');
+  R(15,40,60,2,'#5a4a32');R(15,40,2,75,'#5a4a32');
+  R(73,40,2,75,'#5a4a32');R(15,113,62,2,'#5a4a32');
+  // Window cross bars
+  R(44,40,2,75,'#5a4a32');R(15,75,60,2,'#5a4a32');
+  // Pre-dawn glow
+  vGrad(17,42,26,32,'#1a2050','#2a3060');
+  vGrad(46,42,26,32,'#1a2050','#2a3060');
+  vGrad(17,77,26,34,'#2a3060','#3a4070');
+  vGrad(46,77,26,34,'#2a3060','#3a4070');
+  // Stars
+  R(25,48,1,1,'#aaa');R(55,52,1,1,'#aaa');R(35,88,1,1,'#888');
+
+  // Clock
+  const cx=220,cy=50;
+  ctx.beginPath();ctx.arc(cx,cy,10,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();
+  ctx.strokeStyle='#333';ctx.lineWidth=1;ctx.stroke();
+  // Clock hands - 6:30
+  ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx,cy+6);ctx.stroke(); // minute at 6
+  ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx-4,cy+2);ctx.stroke(); // hour between 6 and 7
+
+  // Notice board
+  R(250,45,55,45,'#a08050');
+  R(250,45,55,2,'#6a5030');R(250,45,2,45,'#6a5030');
+  R(303,45,2,45,'#6a5030');R(250,88,55,2,'#6a5030');
+  // Pins and papers
+  R(258,52,15,12,'#fff');R(264,54,1,1,'#f00');
+  R(278,55,18,10,'#ffa');R(286,56,1,1,'#00f');
+  R(260,70,12,14,'#adf');R(265,72,1,1,'#f00');
+  R(280,68,18,15,'#fda');R(288,70,1,1,'#0a0');
+
+  // Coat rack with rope (right wall)
+  R(295,65,3,50,'#5a4a32');
+  R(290,65,12,3,'#5a4a32');
+  if(!hasItem('rope')) {
+    // Rope coiled on hook
+    ctx.strokeStyle='#a08040';ctx.lineWidth=2;
+    ctx.beginPath();ctx.arc(296,78,4,0,Math.PI*1.7);ctx.stroke();
+    ctx.strokeStyle='#806030';
+    ctx.beginPath();ctx.arc(296,78,6,0.5,Math.PI*1.5);ctx.stroke();
+  }
+
+  // Door
+  R(130,50,35,80,'#6a4a2a');
+  R(132,52,31,76,'#7a5a3a');
+  R(133,53,14,36,'#6a4a2a');R(150,53,12,36,'#6a4a2a');
+  R(133,92,14,34,'#6a4a2a');R(150,92,12,34,'#6a4a2a');
+  // Door handle
+  R(157,88,3,4,'#ccc');
+  // "EXIT" sign above
+  R(135,42,28,8,'#2a2');ctx.font='6px monospace';ctx.fillStyle='#fff';ctx.fillText('EXIT',138,49);
+
+  // Desk
+  R(10,130,115,4,'#5a3a1a');
+  R(12,134,111,18,'#4a2a0a');
+  R(12,134,111,2,'#6a4a2a');
+  // Desk legs
+  R(15,152,4,16,'#4a2a0a');R(115,152,4,16,'#4a2a0a');
+
+  // Phone on desk
+  const phoneFlash = G.flags.phoneRinging && Math.floor(G.tick/15)%2===0;
+  R(30,120,18,10,'#222');
+  R(32,118,14,3,'#333');
+  // Handset
+  R(28,117,6,4,'#222');R(42,117,6,4,'#222');R(30,115,16,3,'#222');
+  // Red light
+  R(38,122,3,2, phoneFlash?'#ff0000':'#440000');
+
+  // Radio
+  R(55,121,15,9,'#333');R(57,122,11,5,'#444');
+  R(55,118,2,4,'#666'); // antenna
+  R(60,127,5,3,'#555');
+
+  // Coffee mug
+  R(85,124,7,7,'#fff');R(91,126,3,3,'#fff');
+  R(86,125,5,4,'#6a3a1a'); // coffee
+
+  // Papers
+  R(96,123,18,8,'#eee');R(98,125,14,1,'#aaa');R(98,127,10,1,'#aaa');
+
+  // Fruit bowl with apple
+  if(!hasItem('apple')) {
+    R(75,123,8,5,'#8a7a5a'); // bowl
+    R(77,120,5,4,'#cc2222'); // apple
+    R(79,119,1,2,'#228822'); // stem
+  }
+
+  // Chair (behind desk, partially visible)
+  R(55,135,20,5,'#2a2a2a');
+  R(55,128,20,7,'#333');
+  R(57,113,16,16,'#2a2a2a');
+  R(60,108,10,6,'#333');
+
+  // Filing cabinet (left, below window)
+  R(5,100,25,30,'#888');
+  R(5,100,25,2,'#aaa');R(5,100,2,30,'#aaa');
+  R(8,105,19,6,'#777');R(15,107,5,2,'#aaa'); // drawer handle
+  R(8,114,19,6,'#777');R(15,116,5,2,'#aaa');
+  R(8,123,19,6,'#777');R(15,125,5,2,'#aaa');
+}
+
+function drawMotorwayBG() {
+  // Sky - dawn gradient
+  vGrad(0,VERB_H,W,50,'#1a1a3a','#c46030');
+  // Dawn glow at horizon
+  vGrad(0,VERB_H+40,W,15,'#c46030','#e8a050');
+
+  // Distant tree line
+  for(let tx=0;tx<W;tx+=8) {
+    const th=3+Math.sin(tx*0.3)*2+Math.cos(tx*0.7)*1.5;
+    R(tx,VERB_H+48-th,8,th+5,'#1a3a1a');
+  }
+
+  // Green verge (left side, angled for perspective)
+  vGrad(0,VERB_H+53,90,40,'#2a5a1a','#3a7a2a');
+  // Grass texture
+  for(let gx=0;gx<85;gx+=3) {
+    for(let gy=VERB_H+55;gy<VERB_H+90;gy+=4) {
+      if(Math.random()<0.3) R(gx,gy,1,2,'#2a6a1a');
+    }
+  }
+
+  // Fence along verge
+  for(let fx=10;fx<80;fx+=15) {
+    R(fx,VERB_H+60,2,20,'#6a5030');
+  }
+  R(10,VERB_H+65,65,1,'#6a5030');
+  R(10,VERB_H+72,65,1,'#6a5030');
+
+  // Fence gap (for returning pony)
+  R(65,VERB_H+60,15,1,'#3a7a2a');
+
+  // Field beyond fence (hint of other ponies)
+  R(20,VERB_H+55,3,3,'#8a6a0a');R(40,VERB_H+57,3,3,'#8a6a0a');
+
+  // Road surface
+  R(70,VERB_H+55,W-70,GAME_BOT-VERB_H-55,'#4a4a4a');
+
+  // Road edge line (left)
+  R(72,VERB_H+55,2,GAME_BOT-VERB_H-55,'#fff');
+
+  // Lane markings (dashed)
+  for(let ly=VERB_H+60;ly<GAME_BOT;ly+=12) {
+    R(135,ly,2,6,'#fff');
+    R(200,ly,2,6,'#fff');
+    R(265,ly,2,6,'#fff');
+  }
+
+  // Hard shoulder line (right)
+  R(290,VERB_H+55,2,GAME_BOT-VERB_H-55,'#fff');
+
+  // Crash barrier (right)
+  for(let bx=295;bx<W;bx+=20) {
+    R(bx,VERB_H+70,3,GAME_BOT-VERB_H-70,'#aaa');
+  }
+  R(295,VERB_H+80,W-295,3,'#ccc');
+  R(295,VERB_H+95,W-295,3,'#ccc');
+
+  // Verge right
+  vGrad(295,VERB_H+53,W-295,7,'#4a4a4a','#2a5a1a');
+
+  // Road closure signs (far left on road)
+  R(80,VERB_H+65,12,10,'#ff6600');R(81,VERB_H+66,10,8,'#ffaa00');
+  R(80,VERB_H+75,2,15,'#666');
+  R(95,VERB_H+68,12,10,'#ff6600');R(96,VERB_H+69,10,8,'#ffaa00');
+  R(95,VERB_H+78,2,12,'#666');
+
+  // Traffic cones
+  for(let cx=105;cx<130;cx+=10) {
+    R(cx,VERB_H+82,4,6,'#ff4400');R(cx,VERB_H+83,4,2,'#ffaa00');
+    R(cx-1,VERB_H+88,6,2,'#444');
+  }
+
+  // Police car 1 (left, on road)
+  drawPoliceCar(85, VERB_H+95, false);
+
+  // Police car 2 (right)
+  drawPoliceCar(240, VERB_H+100, true);
+
+  // Apple on ground (if placed)
+  if(G.flags.applePlaced && !G.flags.appleEaten) {
+    R(G.flags.appleX-2, G.flags.appleY-2, 5, 4, '#cc2222');
+    R(G.flags.appleX, G.flags.appleY-3, 1, 2, '#228822');
+  }
+}
+
+function drawPoliceCar(x, y, flip) {
+  // Simple police car from above/side at this scale
+  const d = flip?-1:1;
+  // Body
+  R(x,y,35,14,'#fff');
+  // Windows
+  R(x+8,y+2,8,10,'#3a5a8a');
+  R(x+20,y+2,8,10,'#3a5a8a');
+  // Wheels
+  R(x+2,y-1,6,3,'#222');R(x+2,y+12,6,3,'#222');
+  R(x+26,y-1,6,3,'#222');R(x+26,y+12,6,3,'#222');
+  // Light bar
+  const flash1 = Math.floor(G.tick/8)%2===0;
+  const flash2 = !flash1;
+  R(x+13,y,4,2,flash1?'#4444ff':'#222288');
+  R(x+18,y,4,2,flash2?'#4444ff':'#222288');
+  // Police stripe
+  R(x,y+6,35,2,'#2040a0');
+  // POLICE text
+  ctx.font='5px monospace';ctx.fillStyle='#2040a0';
+  ctx.fillText('POLICE',x+3,y+5);
+}
+
+function drawPressBG() {
+  // Sky - later dawn, brighter
+  vGrad(0,VERB_H,W,45,'#3a3a6a','#d4804a');
+  vGrad(0,VERB_H+35,W,15,'#d4804a','#e8b868');
+
+  // Trees on horizon
+  for(let tx=0;tx<W;tx+=6) {
+    const th=4+Math.sin(tx*0.4)*2;
+    R(tx,VERB_H+43-th,6,th+4,'#2a4a1a');
+  }
+
+  // M25 carriageway in background
+  R(0,VERB_H+47,W,20,'#5a5a5a');
+  // Lane markings
+  for(let lx=0;lx<W;lx+=15) { R(lx,VERB_H+56,7,1,'#fff'); }
+  // Moving cars in background
+  const carOffset = (G.tick*0.5)%W;
+  R((carOffset)%W,VERB_H+50,8,4,'#c44');
+  R((carOffset+80)%W,VERB_H+52,10,4,'#48c');
+  R((carOffset+160)%W,VERB_H+49,8,4,'#888');
+  R((carOffset+220)%W,VERB_H+53,10,4,'#4a4');
+
+  // Barrier
+  R(0,VERB_H+67,W,3,'#aaa');
+
+  // Grass/gravel area
+  vGrad(0,VERB_H+70,W,GAME_BOT-VERB_H-70,'#4a6a3a','#5a7a4a');
+  // Hard shoulder
+  R(0,VERB_H+70,W,15,'#7a7a70');
+
+  // Police car 1
+  drawPoliceCar(20, VERB_H+78, false);
+  // Police car 2
+  drawPoliceCar(70, VERB_H+80, false);
+
+  // Grass texture
+  for(let gx=0;gx<W;gx+=4) {
+    for(let gy=VERB_H+85;gy<GAME_BOT;gy+=5) {
+      if(Math.random()<0.2) R(gx,gy,1,2,'#4a7a3a');
+    }
+  }
+}
+
+// ===== HOTSPOTS =====
+function getHotspots() {
+  switch(G.scene) {
+    case 1: return [
+      { id:'phone', label:'Phone', x:26, y:114, w:24, h:16, sx:38, sy:155,
+        look:()=>showText(G.flags.phoneAnswered?'The desk phone. The red light has stopped flashing.':'A standard Thames Valley Police desk phone. The red light is flashing urgently.'),
+        use:()=>{
+          if(G.flags.phoneAnswered) return showText("You've already taken the call.");
+          G.flags.phoneAnswered=true; G.flags.phoneRinging=false;
+          G.player.action='phone';
+          showText("Dispatch: \"We've got a report of a Shetland pony loose on the M25 southbound between junctions 15 and 16. It's heading north against traffic. We need to close the carriageway immediately.\"",()=>{
+            G.player.action=null;
+            showText("You hang up. A Shetland pony on the M25... at 6:30 in the morning. Right. Better get this sorted before rush hour hits.");
+          });
+        },
+        talk:()=>showText("You pick up the handset but there's no one on the line right now."),
+      },
+      { id:'radio', label:'Radio', x:53, y:118, w:18, h:14, sx:62, sy:155,
+        look:()=>showText("Your police radio. Essential for coordinating with units in the field."),
+        use:()=>{
+          if(!G.flags.phoneAnswered) return showText("You should probably answer that ringing phone first.");
+          if(G.flags.closureAuth) return showText("You've already authorized the road closure.");
+          G.flags.closureAuth=true;
+          addItem('auth','Auth','Road closure authorization for M25 J15-J16.');
+          showText("\"All units, this is Paul Anthem, Thames Valley Police. Authorize immediate closure of M25 southbound between junctions 15 and 16. We have a loose animal on the carriageway. Confirm.\"",()=>{
+            showText("\"Copy that, Paul. Units en route. Carriageway closure authorized at 06:50.\"");
+          });
+        },
+        talk:()=>showText("You should use the radio, not chat to it."),
+      },
+      { id:'coffee', label:'Coffee', x:83, y:122, w:10, h:10, sx:88, sy:155,
+        look:()=>showText("Your morning coffee. Still warm. It's going to be one of those days."),
+        use:()=>showText("You take a quick sip. Strong and bitter. Just how you like it."),
+        talk:()=>showText("\"Give me strength,\" you mutter into your mug."),
+      },
+      { id:'window', label:'Window', x:15, y:40, w:60, h:75, sx:45, sy:155,
+        look:()=>showText("Pre-dawn darkness outside. The M25 is out there somewhere, and apparently so is a Shetland pony."),
+        use:()=>showText("The window doesn't open. Health and safety."),
+        talk:()=>showText("You're not at the shouting-out-the-window stage yet."),
+      },
+      { id:'clock', label:'Clock', x:210, y:40, w:22, h:22, sx:160, sy:155,
+        look:()=>showText("6:30 AM. Friday, October 10th, 2003. Far too early for equine-related emergencies."),
+        use:()=>showText("You can't turn back time, much as you'd like to."),
+        talk:()=>showText("\"Come on, come on...\" The hands don't move any faster."),
+      },
+      { id:'noticeboard', label:'Notice Board', x:248, y:43, w:58, h:48, sx:270, sy:155,
+        look:()=>showText("Various notices: a charity fun run, a missing cat poster, and a health & safety memo about proper kettle usage."),
+        use:()=>showText("Nothing useful to take from here."),
+        talk:()=>showText("The notice board has nothing to say."),
+      },
+      { id:'rope', label:'Rope', x:288, y:68, w:16, h:25, sx:296, sy:155,
+        look:()=>hasItem('rope')?showText("Just an empty coat hook."):showText("A sturdy rope hanging from the coat rack. Looks like it could be useful for... rounding things up."),
+        use:()=>{
+          if(hasItem('rope')) return showText("You already took the rope.");
+          addItem('rope','Rope','A sturdy rope for rounding things up.');
+          showText("You grab the rope and coil it over your shoulder. You have a feeling you'll need this.");
+        },
+        talk:()=>showText("It's a rope. It's not much of a conversationalist."),
+      },
+      { id:'apple', label:'Apple', x:74, y:118, w:10, h:8, sx:80, sy:155,
+        look:()=>hasItem('apple')?showText("An empty fruit bowl."):showText("A fresh red apple in the fruit bowl. You were saving it for lunch."),
+        use:()=>{
+          if(hasItem('apple')) return showText("The fruit bowl is empty.");
+          addItem('apple','Apple','A fresh red apple. Ponies love apples.');
+          showText("You pocket the apple. Lunch can wait — you have a feeling a certain pony might appreciate this more than you will.");
+        },
+        talk:()=>showText("\"Sorry, apple. Duty calls.\""),
+      },
+      { id:'door', label:'Door', x:128, y:48, w:40, h:84, sx:148, sy:155,
+        look:()=>showText("The exit. Your car is waiting outside."),
+        use:()=>{
+          if(!G.flags.phoneAnswered) return showText("The phone is ringing. You should answer it first.");
+          if(!G.flags.closureAuth) return showText("You need to authorize the road closure before heading out. Use the radio.");
+          if(!hasItem('rope')) return showText("You might want to grab that rope from the coat rack. How else are you going to catch a pony?");
+          showText("Time to go. You head out to your car and drive to the M25.",()=>changeScene(2));
+        },
+        walk:()=>{
+          if(!G.flags.phoneAnswered) return showText("The phone is ringing. You should answer it first.");
+          if(!G.flags.closureAuth) return showText("You need to authorize the road closure before heading out.");
+          if(!hasItem('rope')) return showText("Better grab that rope before you go.");
+          showText("Time to go. You head to the M25.",()=>changeScene(2));
+        },
+        talk:()=>showText("You could talk to the door, or you could walk through it."),
+      },
+      { id:'cabinet', label:'Filing Cabinet', x:3, y:98, w:28, h:34, sx:20, sy:155,
+        look:()=>showText("A grey filing cabinet. Decades of Thames Valley Police paperwork in there. None of it about ponies. Yet."),
+        use:()=>showText("No time for paperwork right now."),
+        talk:()=>showText("The cabinet says nothing. It's seen things."),
+      },
+    ];
+    case 2: return [
+      { id:'pony', label:'Shetland Pony', x:G.pony.x-14, y:G.pony.y-18, w:28, h:22, sx:G.pony.x, sy:G.pony.y+10,
+        look:()=>{
+          if(G.pony.state==='roped') return showText("The pony is roped but still prancing nervously. You should try to calm him down.");
+          if(G.pony.state==='calm') return showText("The pony seems calm now. Time to lead him back through the fence gap to his field.");
+          if(G.pony.state==='eating') return showText("The pony is happily munching on the apple. Now's your chance to get that rope around him!");
+          return showText("A small Shetland pony, trotting north on the southbound carriageway of the M25. He seems more excited than distressed. Quite the adventurer.");
+        },
+        use:()=>{
+          if(G.pony.state==='roped') {
+            G.pony.state='calm';G.player.action='calm';
+            return showText("You gently stroke the pony's mane. \"Easy there, boy. Easy.\" He snorts once, then nuzzles your hand. He's calmed down.",()=>{G.player.action=null;});
+          }
+          if(G.pony.state==='calm') return showText("The pony is calm. You should walk him over to the fence gap to return him to his field.");
+          if(G.pony.state==='trot') return showText("He's trotting about too quickly! You need to lure him close with something he likes first.");
+          if(G.pony.state==='eating') return showText("He's busy eating. Maybe use the rope on him while he's distracted?");
+          return showText("The pony eyes you warily.");
+        },
+        useItem:{
+          rope:(()=>{
+            if(G.pony.state==='eating') {
+              G.pony.state='roped';
+              showText("You carefully loop the rope around the pony's neck. Got him! He tugs a bit but the rope holds.",()=>{
+                showText("Now you need to calm him down before you can lead him anywhere.");
+              });
+            } else if(G.pony.state==='trot') {
+              showText("The pony's trotting about too fast! You can't get close enough. You need to lure him to you first.");
+            } else if(G.pony.state==='roped') {
+              showText("You've already roped him. Try calming him down now.");
+            } else {
+              showText("The rope is already on him.");
+            }
+          }),
+          apple:(()=>{
+            showText("You should put the apple on the ground near where the pony is trotting, not throw it at him!");
+          }),
+        },
+        talk:()=>{
+          if(G.pony.state==='calm') return showText("\"Good boy. Let's get you home.\" The pony seems to understand.");
+          return showText("\"Here, boy! Come on!\" The pony ignores you completely. Typical.");
+        },
+      },
+      { id:'ground', label:'Road', x:100, y:VERB_H+90, w:140, h:60, sx:170, sy:150,
+        look:()=>showText("The grey asphalt of the M25 southbound carriageway. Usually packed with commuters at this hour."),
+        use:()=>showText("It's a motorway. Not much to do with it."),
+        useItem:{
+          apple:(()=>{
+            if(G.pony.state!=='trot') return showText("The apple's already done its job.");
+            G.flags.applePlaced=true;
+            G.flags.appleX=170;G.flags.appleY=125;
+            removeItem('apple');
+            G.pony.state='approach';G.pony.tx=175;G.pony.ty=122;
+            showText("You place the apple on the road surface. The pony's ears perk up... he can smell it!");
+          }),
+          rope:(()=>showText("You can't lasso the tarmac. Try the pony.")),
+        },
+        talk:()=>showText("\"The things I do for Thames Valley Police...\""),
+      },
+      { id:'verge', label:'Grass Verge', x:0, y:VERB_H+53, w:70, h:40, sx:50, sy:145,
+        look:()=>showText("A green verge alongside the motorway. Beyond the fence you can see a field with more Shetland ponies. That must be where our escapee came from."),
+        use:()=>showText("Nothing to do here — the action is on the road."),
+        talk:()=>showText("You can hear the other ponies whinnying from the field. They seem concerned about their friend."),
+      },
+      { id:'fence', label:'Fence Gap', x:60, y:VERB_H+58, w:22, h:25, sx:70, sy:145,
+        look:()=>showText("A gap in the fence where the pony must have escaped through. You can lead him back this way."),
+        use:()=>showText("The gap is already open. You need to bring the pony here."),
+        walk:()=>{
+          if(G.pony.state==='calm') {
+            showText("You gently lead the pony through the gap in the fence and back into his field. He trots off happily to rejoin his friends.",()=>{
+              G.pony.state='gone';
+              showText("7:15 AM — The Shetland pony is safely back in his field. The M25 southbound can be reopened.",()=>{
+                showText("But first... you notice a journalist heading your way. Better handle the press before you wrap up.",()=>changeScene(3));
+              });
+            });
+          } else if(G.pony.state==='roped') {
+            showText("The pony is still too agitated to lead through the gap. Calm him down first.");
+          } else {
+            showText("You need to catch the pony first before you can return him through here.");
+          }
+        },
+        talk:()=>showText("The other ponies in the field look at you expectantly."),
+      },
+      { id:'policecar1', label:'Police Car', x:83, y:VERB_H+93, w:38, h:16, sx:102, sy:150,
+        look:()=>showText("A Thames Valley Police patrol car, lights flashing. Your colleagues are helping manage the scene."),
+        use:()=>showText("The car is fine where it is. Focus on the pony."),
+        talk:()=>showText("\"Alright, lads, let's get this sorted!\" Your colleagues nod."),
+      },
+      { id:'signs', label:'Road Signs', x:78, y:VERB_H+63, w:32, h:28, sx:95, sy:150,
+        look:()=>showText("Road closure signs. The M25 southbound is officially shut between junctions 15 and 16. Morning traffic is starting to build up behind the closure."),
+        use:()=>showText("The signs are already in place."),
+        talk:()=>showText("The signs speak for themselves."),
+      },
+    ];
+    case 3: return [
+      { id:'journalist', label:'Horse & Hound Journalist', x:195, y:118, w:20, h:30, sx:195, sy:152,
+        look:()=>showText("A journalist from Horse & Hound magazine. She's got her notepad ready and a keen look in her eye. The equestrian press waits for no one."),
+        use:()=>showText("You probably shouldn't manhandle the press."),
+        talk:()=>{
+          if(G.flags.pressQ1===undefined) {
+            startInterview();
+          } else if(G.flags.pressDone) {
+            showText("\"Thanks again, Mr Anthem. This is going to be a great story!\"");
+          } else {
+            continueInterview();
+          }
+        },
+      },
+      { id:'pcar1', label:'Police Car', x:18, y:VERB_H+76, w:38, h:16, sx:40, sy:148,
+        look:()=>showText("One of the Thames Valley Police cars. The blue lights are still flashing."),
+        use:()=>showText("No need to get back in. You've got a press statement to give."),
+        talk:()=>showText("You radio in: \"Pony safely returned. Reopening the carriageway at 07:37.\""),
+      },
+      { id:'pcar2', label:'Police Car', x:68, y:VERB_H+78, w:38, h:16, sx:88, sy:148,
+        look:()=>showText("Another patrol car. Quite the turnout for one small pony."),
+        use:()=>showText("You don't need the car right now."),
+        talk:()=>showText("Your colleague gives you a thumbs up from inside."),
+      },
+      { id:'motorway', label:'M25', x:0, y:VERB_H+47, w:W, h:22, sx:160, sy:148,
+        look:()=>showText("The M25 carriageway. Traffic is starting to flow again. The morning commuters will barely know what happened here."),
+        use:()=>showText("Your work on the motorway is done."),
+        talk:()=>showText("\"Back to normal. Hopefully.\""),
+      },
+    ];
+  }
+  return [];
+}
+
+// ===== INTERVIEW LOGIC =====
+function startInterview() {
+  showText("\"Mr Anthem? Sarah Collins, Horse & Hound magazine. I heard about the pony on the M25. Can I ask you a few questions for our readers?\"",()=>{
+    askQ1();
+  });
+}
+function askQ1() {
+  showChoices("\"Can you describe what happened here this morning?\"", [
+    {label:"Professional response", val:'pro'},
+    {label:"Humorous response", val:'fun'},
+    {label:"Dramatic response", val:'drama'},
+  ], (c)=>{
+    G.flags.pressQ1=c.val; G.journChoices.push(c.val);
+    const responses={
+      pro:"\"At approximately 06:30 this morning, Thames Valley Police received a report of a Shetland pony loose on the M25 southbound between junctions 15 and 16. We closed the carriageway and safely returned the animal to its enclosure.\"",
+      fun:"\"Well, we had a bit of an unexpected commuter this morning. A Shetland pony decided to test the M25 — heading north on the southbound carriageway, no less. Clearly doesn't read road signs.\"",
+      drama:"\"It was 6:30 AM. The call came in. A lone Shetland pony, facing down three lanes of Britain's busiest motorway. One wrong move and... well, let's just say the stakes were high.\"",
+    };
+    showText(responses[c.val],()=>askQ2());
+  });
+}
+function askQ2() {
+  showChoices("\"Was the pony in any danger?\"", [
+    {label:"Reassuring response", val:'pro'},
+    {label:"Light-hearted response", val:'fun'},
+    {label:"Intense response", val:'drama'},
+  ], (c)=>{
+    G.flags.pressQ2=c.val; G.journChoices.push(c.val);
+    const responses={
+      pro:"\"The pony was never in serious danger. We closed the road quickly and our officers handled the situation with care. He seemed excited rather than distressed, and we were able to calm him down.\"",
+      fun:"\"Danger? He was having the time of his life! Honestly, he seemed more excited than any of us. Like a tourist who'd wandered onto the wrong motorway.\"",
+      drama:"\"Every second counted. A Shetland pony versus 70mph traffic — the margin for error was razor thin. But Thames Valley Police don't back down from a challenge, no matter how many hooves are involved.\"",
+    };
+    showText(responses[c.val],()=>askQ3());
+  });
+}
+function askQ3() {
+  showChoices("\"How did you actually catch him?\"", [
+    {label:"By-the-book response", val:'pro'},
+    {label:"Comedic response", val:'fun'},
+    {label:"Heroic response", val:'drama'},
+  ], (c)=>{
+    G.flags.pressQ3=c.val; G.journChoices.push(c.val);
+    const responses={
+      pro:"\"We used an apple to lure the pony within reach, then secured him with a rope. Once calm, we led him back through a gap in the fence to his field of origin.\"",
+      fun:"\"Let's just say I owe my lunch apple a debt of gratitude. The pony and I struck a deal — one apple for a peaceful surrender. The rope was just a formality at that point.\"",
+      drama:"\"It was a tense standoff. Man versus pony. But I had one ace up my sleeve — a fresh apple. The moment he went for it, I made my move. One throw of the rope and it was over. Justice was served.\"",
+    };
+    G.flags.pressDone=true;
+    showText(responses[c.val],()=>{
+      showText("\"Brilliant, thank you Mr Anthem. Our readers at Horse & Hound will love this story!\"",()=>{
+        showText("7:37 AM — The M25 southbound reopens. The morning rush begins as if nothing happened.",()=>{
+          showText("Another day in Thames Valley. The commuters will never know what you did for them... or for one very adventurous Shetland pony.",()=>{
+            G.screen='end';
+          });
+        });
+      });
+    });
+  });
+}
+function continueInterview() {
+  if(G.flags.pressQ1===undefined) askQ1();
+  else if(G.flags.pressQ2===undefined) askQ2();
+  else if(G.flags.pressQ3===undefined) askQ3();
+  else showText("\"Thanks again! Great story.\"");
+}
+
+// ===== SCENE TRANSITIONS =====
+function changeScene(n) {
+  G.transition=60;G.nextScene=n;
+}
+
+function initScene(n) {
+  G.scene=n; G.hoverHotspot=null; G.textBox=null; G.dialog=null; G.selItem=null;
+  switch(n) {
+    case 1:
+      G.player.x=100;G.player.y=158;G.player.tx=100;G.player.ty=158;
+      G.player.visible=true;G.player.action=null;G.player.walking=false;
+      G.flags.phoneRinging=true;
+      break;
+    case 2:
+      G.player.x=100;G.player.y=155;G.player.tx=100;G.player.ty=155;
+      G.player.visible=true;G.player.action=null;G.player.walking=false;
+      G.pony.x=200;G.pony.y=115;G.pony.state='trot';G.pony.timer=0;
+      break;
+    case 3:
+      G.player.x=160;G.player.y=152;G.player.tx=160;G.player.ty=152;
+      G.player.visible=true;G.player.action=null;G.player.walking=false;
+      break;
+  }
+}
+
+// ===== PLAYER MOVEMENT =====
+function updatePlayer() {
+  const p=G.player;
+  if(!p.walking) return;
+  const dx=p.tx-p.x, dy=p.ty-p.y;
+  const d=Math.sqrt(dx*dx+dy*dy);
+  if(d<2) {
+    p.walking=false; p.frame=0;
+    if(G.walkCB) { const cb=G.walkCB; G.walkCB=null; cb(); }
+    return;
+  }
+  p.x+=dx/d*WALK_SPEED;
+  p.y+=dy/d*WALK_SPEED;
+  p.dir = Math.abs(dx)>Math.abs(dy)?(dx>0?1:-1):0;
+  p.frame+=0.12;
+}
+
+function walkTo(x, y, cb) {
+  // Clamp to walkable area
+  const minY=G.scene===1?148:G.scene===2?115:VERB_H+90;
+  const maxY=GAME_BOT-6;
+  const clampY=Math.max(minY,Math.min(maxY,y));
+  const clampX=Math.max(10,Math.min(W-10,x));
+  G.player.tx=clampX;G.player.ty=clampY;
+  G.player.walking=true;G.walkCB=cb||null;
+}
+
+// ===== PONY AI =====
+const PONY_WP=[{x:160,y:112},{x:220,y:118},{x:180,y:108},{x:250,y:115},{x:140,y:120}];
+function updatePony() {
+  if(G.scene!==2) return;
+  const p=G.pony;
+  p.frame+=0.08;
+  if(p.state==='trot') {
+    const dx=p.tx-p.x, dy=p.ty-p.y;
+    const d=Math.sqrt(dx*dx+dy*dy);
+    if(d<3) {
+      p.timer++;
+      if(p.timer>90) {
+        const wp=PONY_WP[Math.floor(Math.random()*PONY_WP.length)];
+        p.tx=wp.x;p.ty=wp.y;p.timer=0;
+      }
+    } else {
+      p.x+=dx/d*0.4;p.y+=dy/d*0.4;
+    }
+  } else if(p.state==='approach') {
+    const dx=p.tx-p.x, dy=p.ty-p.y;
+    const d=Math.sqrt(dx*dx+dy*dy);
+    if(d<3) {
+      p.state='eating';G.flags.appleEaten=true;
+    } else {
+      p.x+=dx/d*0.3;p.y+=dy/d*0.3;
+    }
+  } else if(p.state==='roped'||p.state==='calm') {
+    // Follow player loosely
+    const dx=G.player.x+15-p.x, dy=G.player.y-5-p.y;
+    const d=Math.sqrt(dx*dx+dy*dy);
+    if(d>25) { p.x+=dx/d*0.6;p.y+=dy/d*0.6; }
+  }
+}
+
+// ===== INPUT HANDLING =====
+function handleInput() {
+  if(G.screen==='title') { if(clicked){G.screen='game';initScene(1);} clicked=false;rclicked=false;return; }
+  if(G.screen==='end') { if(clicked){G.screen='title';} clicked=false;rclicked=false;return; }
+
+  if(rclicked) {
+    rclicked=false;
+    if(G.selItem) { G.selItem=null; }
+    else {
+      const vi=VERBS.indexOf(G.verb);
+      G.verb=VERBS[(vi+1)%4];
+    }
+  }
+
+  if(!clicked) return;
+  clicked=false;
+
+  // Dialog active
+  if(G.dialog) {
+    if(G.dialog.hover>=0 && G.dialog.cb) {
+      const choice=G.dialog.choices[G.dialog.hover];
+      const cb=G.dialog.cb;
+      G.dialog=null;
+      cb(choice);
+    }
+    return;
+  }
+
+  // Text box active
+  if(G.textBox) {
+    const cb=G.textBox.cb;
+    G.textBox=null;
+    if(cb) cb();
+    return;
+  }
+
+  // Transitioning
+  if(G.transition>0) return;
+
+  // Verb bar click
+  if(my<VERB_H) { handleVerbClick(); return; }
+
+  // Inventory click
+  if(my>=GAME_BOT) { handleInvClick(); return; }
+
+  // Game area click - find hotspot
+  const hotspots=getHotspots();
+  let hit=null;
+  for(const h of hotspots) {
+    if(mx>=h.x && mx<h.x+h.w && my>=h.y && my<h.y+h.h) { hit=h; break; }
+  }
+
+  if(hit) {
+    const verb=G.selItem?'useItem':G.verb;
+    if(verb==='walk') {
+      if(hit.walk) { walkTo(hit.sx||hit.x+hit.w/2, hit.sy||G.player.y, hit.walk); }
+      else { walkTo(hit.sx||hit.x+hit.w/2, hit.sy||G.player.y); }
+    } else if(verb==='look') {
+      if(hit.look) hit.look();
+    } else if(verb==='talk') {
+      if(hit.talk) walkTo(hit.sx||hit.x+hit.w/2, hit.sy||G.player.y, hit.talk);
+      else showText("You can't talk to that.");
+    } else if(verb==='use') {
+      if(hit.use) walkTo(hit.sx||hit.x+hit.w/2, hit.sy||G.player.y, hit.use);
+      else showText("You can't use that.");
+    } else if(verb==='useItem') {
+      const itemId=G.selItem.id;
+      if(hit.useItem && hit.useItem[itemId]) {
+        walkTo(hit.sx||hit.x+hit.w/2, hit.sy||G.player.y, hit.useItem[itemId]);
+      } else {
+        showText("That doesn't work.");
+      }
+      G.selItem=null;
+    }
+  } else {
+    // No hotspot - walk if walk verb
+    if(G.verb==='walk'&&!G.selItem) {
+      walkTo(mx, my);
+    } else if(G.selItem) {
+      G.selItem=null;
+    }
+  }
+}
+
+// ===== HOVER DETECTION =====
+function updateHover() {
+  G.hoverHotspot=null;
+  if(G.textBox||G.dialog||G.transition>0||my<VERB_H||my>=GAME_BOT) return;
+  const hotspots=getHotspots();
+  for(const h of hotspots) {
+    if(mx>=h.x && mx<h.x+h.w && my>=h.y && my<h.y+h.h) { G.hoverHotspot=h; break; }
+  }
+}
+
+// ===== TITLE SCREEN =====
+function drawTitle() {
+  R(0,0,W,H,'#0a0a1a');
+  // Stars
+  for(let i=0;i<40;i++) {
+    const sx=(i*97+33)%W, sy=(i*53+17)%(H-60)+10;
+    const bright=Math.sin(G.tick*0.05+i)*0.3+0.7;
+    ctx.fillStyle=`rgba(255,255,255,${bright})`;
+    ctx.fillRect(sx,sy,1,1);
+  }
+  // M25 road at bottom
+  R(0,150,W,50,'#3a3a3a');
+  for(let lx=0;lx<W;lx+=20) R(lx,174,10,2,'#fff');
+  // Pony silhouette on road
+  const px=160+Math.sin(G.tick*0.03)*20;
+  R(px-8,145,16,12,'#b8860b');R(px-12,143,6,6,'#b8860b');
+  R(px-8,142,5,3,'#5a3a1a');
+  R(px-10,148,2,4,'#8a6a0a');R(px-6,148,2,4,'#8a6a0a');
+  R(px+2,148,2,4,'#8a6a0a');R(px+5,148,2,4,'#8a6a0a');
+  // Blue flashing light
+  if(Math.floor(G.tick/10)%2) { R(60,155,6,3,'#4444ff');R(250,158,6,3,'#4444ff'); }
+  // Title
+  ctx.font='bold 16px monospace';ctx.fillStyle='#e8c840';
+  ctx.textAlign='center';
+  ctx.fillText('PONY QUEST',W/2,55);
+  ctx.font='12px monospace';ctx.fillStyle='#c0a030';
+  ctx.fillText('M25 INCIDENT',W/2,72);
+  ctx.font='8px monospace';ctx.fillStyle='#8888aa';
+  ctx.fillText('A Thames Valley Police Adventure',W/2,90);
+  ctx.fillText('Based on true events — 10 October 2003',W/2,104);
+  ctx.fillStyle='#aaaacc';
+  const blink=Math.floor(G.tick/30)%2;
+  if(blink) ctx.fillText('Click to begin',W/2,130);
+  ctx.textAlign='left';
+}
+
+// ===== END SCREEN =====
+function drawEndScreen() {
+  R(0,0,W,H,'#0a0a1a');
+  // Determine headline
+  const tones=G.journChoices;
+  let pro=0,fun=0,drama=0;
+  for(const t of tones){if(t==='pro')pro++;if(t==='fun')fun++;if(t==='drama')drama++;}
+  let headline,subline;
+  if(pro>=2) {
+    headline="Thames Valley Police handle";
+    subline="pony escape with aplomb";
+  } else if(fun>=2) {
+    headline="Shetland pony's M25 adventure";
+    subline="ends with apple-based diplomacy";
+  } else if(drama>=2) {
+    headline="Heroic police standoff with";
+    subline="rogue pony on Britain's busiest road";
+  } else {
+    headline="Loose Shetland closes M25 —";
+    subline="pony safely returned after 47 minutes";
+  }
+
+  ctx.textAlign='center';
+  ctx.font='bold 14px monospace';ctx.fillStyle='#e8c840';
+  ctx.fillText('PONY QUEST',W/2,35);
+  ctx.font='10px monospace';ctx.fillStyle='#c0a030';
+  ctx.fillText('M25 INCIDENT',W/2,50);
+  ctx.font='8px monospace';ctx.fillStyle='#8888aa';
+  ctx.fillText('CASE CLOSED',W/2,68);
+
+  // Horse & Hound newspaper
+  R(60,78,200,80,'#f5f0e0');R(60,78,200,2,'#333');
+  ctx.font='bold 10px serif';ctx.fillStyle='#333';
+  ctx.fillText('HORSE & HOUND',W/2,94);
+  R(80,96,160,1,'#333');
+  ctx.font='8px monospace';ctx.fillStyle='#222';
+  ctx.fillText(headline,W/2,110);
+  ctx.fillText(subline,W/2,122);
+  ctx.font='7px monospace';ctx.fillStyle='#555';
+  ctx.fillText('By Sarah Collins — 10 October 2003',W/2,138);
+  ctx.fillText('The M25 reopened at 7:37 AM after',W/2,150);
+  ctx.fillText('a 47-minute closure.',W/2,158);
+
+  ctx.font='8px monospace';ctx.fillStyle='#aaaacc';
+  const blink=Math.floor(G.tick/30)%2;
+  if(blink) ctx.fillText('Click to play again',W/2,185);
+  ctx.textAlign='left';
+}
+
+// ===== MAIN DRAW =====
+function drawGame() {
+  // Background
+  switch(G.scene) {
+    case 1: drawStationBG(); break;
+    case 2: drawMotorwayBG(); break;
+    case 3: drawPressBG(); break;
+  }
+
+  // Pony (scene 2)
+  if(G.scene===2 && G.pony.state!=='gone') {
+    drawPonySprite(G.pony.x, G.pony.y, G.pony.frame, G.pony.state==='roped'||G.pony.state==='calm');
+  }
+
+  // Journalist (scene 3)
+  if(G.scene===3) {
+    drawJournalist(200, 152);
+  }
+
+  // Player
+  if(G.player.visible) {
+    drawPaul(G.player.x, G.player.y, G.player.dir, G.player.frame, G.player.action);
+  }
+
+  // UI
+  drawVerbBar();
+  drawInventory();
+
+  // Text/Dialog overlay
+  drawTextBox();
+  drawChoiceBox();
+
+  // Transition fade
+  if(G.transition>0) {
+    const alpha = G.transition>30 ? (60-G.transition)/30 : (30-G.transition)/30;
+    const fadeAlpha = G.transition>30 ? (G.transition-30)/30 : G.transition/30;
+    ctx.fillStyle=`rgba(0,0,0,${fadeAlpha})`;
+    ctx.fillRect(0,0,W,H);
+  }
+
+  // Cursor (drawn last)
+  drawCursor();
+}
+
+// ===== MAIN LOOP =====
+function loop() {
+  G.tick++;
+
+  // Transition logic
+  if(G.transition>0) {
+    G.transition--;
+    if(G.transition===30) initScene(G.nextScene);
+  }
+
+  // Update
+  if(G.screen==='game' && !G.textBox && !G.dialog && G.transition===0) {
+    updatePlayer();
+    updatePony();
+  }
+  updateHover();
+  handleInput();
+
+  // Draw
+  ctx.clearRect(0,0,W,H);
+  if(G.screen==='title') drawTitle();
+  else if(G.screen==='end') drawEndScreen();
+  else drawGame();
+
+  // Blit buffer to display
+  dctx.clearRect(0,0,display.width,display.height);
+  dctx.drawImage(buf,0,0,display.width,display.height);
+
+  requestAnimationFrame(loop);
+}
+
+// ===== START =====
+loop();
+</script>
+</body>
+</html>
