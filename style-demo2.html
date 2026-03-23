@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pony Quest — Art Style v2</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1a2a;color:#ccc;font-family:monospace;padding:20px}
+h1{color:#e8c840;margin-bottom:4px;font-size:18px}
+h2{color:#c0a030;margin:15px 0 5px;font-size:14px}
+p{font-size:12px;color:#888;margin-bottom:10px;max-width:700px;line-height:1.5}
+.row{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:20px}
+.panel{background:#111;border:1px solid #333;padding:10px;border-radius:4px}
+.panel h3{color:#aaa;font-size:11px;margin-bottom:8px}
+canvas{image-rendering:pixelated;image-rendering:crisp-edges;display:block;margin:0 auto}
+</style>
+</head>
+<body>
+<h1>Pony Quest — Art Style v2: PQ2 VGA Target</h1>
+<p>Pushing for Police Quest 2 256-colour VGA quality. Using Canvas paths, bezier curves, layered painting, and hand-crafted pixel sprites.</p>
+
+<h2>Characters (Style C — outlined pixel art)</h2>
+<div class="row" id="charRow"></div>
+
+<h2>Scene 1: Police Station Interior (06:30 AM)</h2>
+<div class="row" id="stationRow"></div>
+
+<h2>Scene 2: M25 Motorway at Dawn</h2>
+<div class="row" id="motorwayRow"></div>
+
+<script>
+'use strict';
+
+function makePanel(parent, title, w, h, scale) {
+  const div = document.createElement('div');
+  div.className = 'panel';
+  const lbl = document.createElement('h3');
+  lbl.textContent = title;
+  div.appendChild(lbl);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.style.width = (w*scale)+'px'; c.style.height = (h*scale)+'px';
+  div.appendChild(c);
+  parent.appendChild(div);
+  return c.getContext('2d');
+}
+
+// ============================================================
+// PIXEL SPRITE RENDERER
+// ============================================================
+function drawSprite(ctx, data, pal, px, py) {
+  for(let y=0;y<data.length;y++)
+    for(let x=0;x<data[y].length;x++) {
+      if(data[y][x]===0) continue;
+      ctx.fillStyle=pal[data[y][x]];
+      ctx.fillRect(px+x, py+y, 1, 1);
+    }
+}
+
+// ============================================================
+// PAUL — Style C (outlined, confirmed good)
+// ============================================================
+const P_PAL = [
+  null,'#0a0a12','#2a1a0e','#5a3828','#dba67a','#c49060','#ecd4a8',
+  '#0f1a30','#1a2744','#243358','#2e4070','#3a5088','#c0c0c0','#111',
+  '#e0e0e0','#cc3333','#888','#1a1a2a','#2a2a3a',
+];
+const PAUL = [
+ [0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0],
+ [0,0,0,0,1,3,2,3,3,2,3,1,0,0,0,0],
+ [0,0,0,1,3,2,2,2,2,2,2,3,1,0,0,0],
+ [0,0,0,1,2,3,2,3,3,2,3,2,1,0,0,0],
+ [0,0,0,1,5,4,6,4,4,6,4,5,1,0,0,0],
+ [0,0,0,1,5,4,13,4,4,13,4,5,1,0,0,0],
+ [0,0,0,0,1,5,4,4,4,4,5,1,0,0,0,0],
+ [0,0,0,0,1,5,4,5,5,4,5,1,0,0,0,0],
+ [0,0,0,0,0,1,5,4,4,5,1,0,0,0,0,0],
+ [0,0,1,1,11,10,9,9,9,9,10,11,1,1,0,0],
+ [0,0,1,10,9,9,12,9,15,9,9,9,10,1,0,0],
+ [0,0,1,9,8,8,8,15,8,8,8,8,9,1,0,0],
+ [0,1,10,9,8,8,8,15,8,8,8,8,9,10,1,0],
+ [0,1,9,7,8,8,8,8,8,8,8,8,7,9,1,0],
+ [0,1,5,7,8,8,8,8,8,8,8,8,7,5,1,0],
+ [0,0,1,13,13,16,13,13,13,16,13,13,1,0,0,0],
+ [0,0,0,1,7,8,9,7,7,9,8,7,1,0,0,0],
+ [0,0,0,1,7,8,9,7,7,9,8,7,1,0,0,0],
+ [0,0,0,1,7,8,9,1,1,9,8,7,1,0,0,0],
+ [0,0,0,1,7,8,9,0,0,9,8,7,1,0,0,0],
+ [0,0,0,1,7,8,9,0,0,9,8,7,1,0,0,0],
+ [0,0,0,1,7,8,7,0,0,7,8,7,1,0,0,0],
+ [0,0,0,1,7,7,7,0,0,7,7,7,1,0,0,0],
+ [0,0,0,1,13,17,13,0,0,13,17,13,1,0,0,0],
+ [0,0,1,17,17,18,17,0,0,17,18,17,17,1,0,0],
+ [0,0,1,17,13,17,17,0,0,17,17,13,17,1,0,0],
+ [0,0,0,1,1,1,1,0,0,1,1,1,1,0,0,0],
+];
+
+// ============================================================
+// PONY — Proper pixel art, 28x18, outlined
+// ============================================================
+const PO_PAL = [
+  null,
+  '#080604',     // 1 outline
+  '#c89818',     // 2 body bright
+  '#b08010',     // 3 body mid
+  '#906808',     // 4 body dark
+  '#704e06',     // 5 body darkest
+  '#3a2008',     // 6 mane dark
+  '#5a3010',     // 7 mane mid
+  '#7a4818',     // 8 mane light
+  '#dbb040',     // 9 body highlight
+  '#e8c858',     // 10 belly/highlight
+  '#222',        // 11 eye
+  '#d8a870',     // 12 muzzle light
+  '#c09060',     // 13 muzzle
+  '#444',        // 14 hoof dark
+  '#333',        // 15 hoof
+  '#f0d868',     // 16 brightest highlight
+  '#eee',        // 17 eye shine
+];
+
+const PONY = [
+ [0,0,0,0,0,0,0,0,0,0,6,7,6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+ [0,0,0,0,1,1,1,0,0,6,7,8,7,6,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+ [0,0,0,1,2,3,2,1,0,1,6,7,6,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+ [0,0,1,9,2,3,2,1,1,1,6,7,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+ [0,1,9,2,3,3,2,1,2,3,3,3,3,2,1,1,0,0,0,0,0,0,0,0,0,0,0,0],
+ [0,1,9,2,11,3,2,1,9,2,2,3,3,2,2,9,1,1,1,0,0,0,0,0,0,0,0,0],
+ [0,1,2,17,2,2,1,9,2,2,9,2,2,9,2,2,2,3,3,1,1,0,0,0,0,0,0,0],
+ [0,0,1,2,3,3,1,2,9,10,10,9,2,2,9,2,2,3,4,4,1,0,0,0,0,0,0,0],
+ [0,0,1,13,12,3,1,2,2,10,16,10,9,9,2,2,3,3,4,5,1,6,7,0,0,0,0,0],
+ [0,0,0,1,13,1,0,1,3,2,10,10,9,2,2,3,3,4,4,5,1,7,8,7,0,0,0,0],
+ [0,0,0,0,1,0,0,1,4,3,2,9,2,2,3,3,4,4,5,1,1,0,7,0,0,0,0,0],
+ [0,0,0,0,0,0,0,0,1,4,3,3,3,3,4,4,5,5,1,0,0,0,0,0,0,0,0,0],
+ [0,0,0,0,0,0,0,0,1,5,1,5,4,1,5,4,1,1,0,0,0,0,0,0,0,0,0,0],
+ [0,0,0,0,0,0,0,0,1,4,1,4,4,1,4,4,1,0,0,0,0,0,0,0,0,0,0,0],
+ [0,0,0,0,0,0,0,0,1,4,1,5,5,1,4,5,1,0,0,0,0,0,0,0,0,0,0,0],
+ [0,0,0,0,0,0,0,0,1,5,1,0,0,1,5,1,0,0,0,0,0,0,0,0,0,0,0,0],
+ [0,0,0,0,0,0,0,1,15,14,1,0,1,15,14,1,0,0,0,0,0,0,0,0,0,0,0],
+ [0,0,0,0,0,0,0,1,1,1,1,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0],
+];
+
+// ============================================================
+// JOURNALIST — Outlined pixel art
+// ============================================================
+const J_PAL = [
+  null,'#0a0a12','#c8a030','#a88020','#dba67a','#c49060','#ecd4a8',
+  '#1a4a1a','#2a6a2a','#3a8a3a','#4aaa4a','#7a6a4a','#8a7a5a',
+  '#a08a6a','#3a2a1a','#e8e8e8','#aaa','#333','#111',
+];
+const JOURNALIST = [
+ [0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0],
+ [0,0,0,0,1,2,2,3,3,2,2,1,0,0,0,0],
+ [0,0,0,1,2,3,2,2,2,2,3,2,1,0,0,0],
+ [0,0,0,1,2,2,2,2,2,2,2,2,1,0,0,0],
+ [0,0,0,1,5,4,6,4,4,6,4,5,1,0,0,0],
+ [0,0,0,1,5,4,17,4,4,17,4,5,1,0,0,0],
+ [0,0,0,0,1,5,4,4,4,4,5,1,0,0,0,0],
+ [0,0,0,0,1,5,4,5,5,4,5,1,0,0,0,0],
+ [0,0,0,0,0,1,5,4,4,5,1,0,0,0,0,0],
+ [0,0,1,1,10,9,8,8,8,8,9,10,1,1,0,0],
+ [0,0,1,9,8,8,8,8,8,8,8,8,9,1,0,0],
+ [0,0,1,8,7,7,7,7,7,7,7,7,8,1,0,0],
+ [0,1,9,8,7,7,7,7,7,7,7,7,8,9,1,0],
+ [0,1,5,7,7,7,7,7,7,7,7,7,7,5,1,0],
+ [0,0,1,7,7,7,7,7,7,7,7,7,7,1,15,0],
+ [0,0,1,18,18,18,18,18,18,18,18,18,1,1,15,1],
+ [0,0,0,1,11,12,12,11,11,12,12,11,1,16,15,1],
+ [0,0,0,1,11,12,12,11,11,12,12,11,1,0,1,0],
+ [0,0,0,1,11,12,12,1,1,12,12,11,1,0,0,0],
+ [0,0,0,1,11,12,12,0,0,12,12,11,1,0,0,0],
+ [0,0,0,1,11,12,11,0,0,11,12,11,1,0,0,0],
+ [0,0,0,1,11,11,11,0,0,11,11,11,1,0,0,0],
+ [0,0,0,1,18,14,18,0,0,18,14,18,1,0,0,0],
+ [0,0,1,14,14,14,14,0,0,14,14,14,14,1,0,0],
+ [0,0,1,14,18,14,14,0,0,14,14,18,14,1,0,0],
+ [0,0,0,1,1,1,1,0,0,1,1,1,1,0,0,0],
+];
+
+// ============================================================
+// PAINTING HELPERS
+// ============================================================
+function fill(ctx,c) { ctx.fillStyle=c; ctx.fill(); }
+function stroke(ctx,c,w) { ctx.strokeStyle=c; ctx.lineWidth=w||1; ctx.stroke(); }
+
+// Organic filled shape from points
+function shape(ctx, pts, c) {
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0],pts[0][1]);
+  for(let i=1;i<pts.length;i++) {
+    const p=pts[i];
+    if(p.length===6) ctx.bezierCurveTo(p[0],p[1],p[2],p[3],p[4],p[5]);
+    else if(p.length===4) ctx.quadraticCurveTo(p[0],p[1],p[2],p[3]);
+    else ctx.lineTo(p[0],p[1]);
+    }
+  ctx.closePath();
+  ctx.fillStyle=c; ctx.fill();
+}
+
+// Organic stroked line
+function curveLine(ctx, pts, c, w) {
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0],pts[0][1]);
+  for(let i=1;i<pts.length;i++) {
+    const p=pts[i];
+    if(p.length===6) ctx.bezierCurveTo(p[0],p[1],p[2],p[3],p[4],p[5]);
+    else if(p.length===4) ctx.quadraticCurveTo(p[0],p[1],p[2],p[3]);
+    else ctx.lineTo(p[0],p[1]);
+  }
+  ctx.strokeStyle=c; ctx.lineWidth=w||1; ctx.stroke();
+}
+
+// Soft gradient rectangle
+function gRect(ctx,x,y,w,h,c1,c2,vertical) {
+  const g=vertical!==false
+    ? ctx.createLinearGradient(x,y,x,y+h)
+    : ctx.createLinearGradient(x,y,x+w,y);
+  g.addColorStop(0,c1);g.addColorStop(1,c2);
+  ctx.fillStyle=g;ctx.fillRect(x,y,w,h);
+}
+
+// Radial glow
+function glow(ctx,cx,cy,r,c1,c2) {
+  const g=ctx.createRadialGradient(cx,cy,0,cx,cy,r);
+  g.addColorStop(0,c1);g.addColorStop(1,c2);
+  ctx.fillStyle=g;
+  ctx.fillRect(cx-r,cy-r,r*2,r*2);
+}
+
+// Dither two colours in a rect (Sierra-style)
+function dither(ctx,x,y,w,h,c1,c2) {
+  for(let py=0;py<h;py++) for(let px=0;px<w;px++) {
+    ctx.fillStyle=((px+py)%2===0)?c1:c2;
+    ctx.fillRect(x+px,y+py,1,1);
+  }
+}
+
+function R(ctx,x,y,w,h,c){ctx.fillStyle=c;ctx.fillRect(x,y,w,h);}
+
+// ============================================================
+// SCENE 1: POLICE STATION INTERIOR — PQ2 VGA STYLE
+// ============================================================
+function drawStation(ctx) {
+  const W=320, H=156; // game area only
+  ctx.save();
+
+  // === CEILING ===
+  gRect(ctx, 0,0,W,18, '#b8b8b0','#a8a8a0');
+  // Ceiling moulding
+  R(ctx,0,16,W,2,'#9090880');
+  shape(ctx,[[0,17],[W,17],[W,18],[0,18]],'#908878');
+
+  // Fluorescent light fixture
+  R(ctx,90,3,140,2,'#606058');
+  R(ctx,95,5,130,8,'#f8f8e8');
+  glow(ctx,160,9,40,'rgba(255,255,240,0.3)','rgba(255,255,240,0)');
+  R(ctx,95,5,130,2,'#fffff8');
+  R(ctx,95,5,2,8,'#d0d0c0');R(ctx,223,5,2,8,'#d0d0c0');
+
+  // === BACK WALL ===
+  // Main wall colour with subtle warmth variation
+  gRect(ctx,0,18,W,95,'#c8ad88','#c0a480');
+  // Subtle wall texture (very faint vertical streaks)
+  for(let wx=0;wx<W;wx+=7) {
+    ctx.fillStyle=`rgba(${160+Math.sin(wx)*10},${140+Math.cos(wx*1.3)*8},${100+Math.sin(wx*0.7)*6},0.08)`;
+    ctx.fillRect(wx,18,3,95);
+  }
+  // Shadow under ceiling
+  gRect(ctx,0,18,W,6,'rgba(0,0,0,0.12)','rgba(0,0,0,0)');
+  // Shadow above desk
+  gRect(ctx,0,105,W,8,'rgba(0,0,0,0)','rgba(0,0,0,0.1)');
+
+  // Skirting board
+  gRect(ctx,0,110,W,4,'#6a5438','#5a4830');
+  R(ctx,0,110,W,1,'#7a6448');
+
+  // === FLOOR ===
+  // Linoleum floor with perspective feel
+  gRect(ctx,0,114,W,H-114,'#7a7870','#6a6860');
+  // Floor tile lines
+  for(let fx=0;fx<W;fx+=24) {
+    ctx.fillStyle='rgba(100,98,90,0.4)';
+    ctx.fillRect(fx,114,1,H-114);
+  }
+  for(let fy=114;fy<H;fy+=12) {
+    ctx.fillStyle='rgba(100,98,90,0.3)';
+    ctx.fillRect(0,fy,W,1);
+  }
+  // Floor reflection of light
+  glow(ctx,160,120,60,'rgba(200,200,180,0.08)','rgba(200,200,180,0)');
+
+  // === WINDOW (left) ===
+  // Window recess shadow
+  R(ctx,12,28,68,80,'#a89070');
+  // Window frame
+  R(ctx,14,30,64,76,'#706048');
+  // Glass panes - pre-dawn sky
+  gRect(ctx,16,32,29,36,'#0c0c24','#182040');
+  gRect(ctx,47,32,29,36,'#0c0c24','#182040');
+  gRect(ctx,16,70,29,34,'#182040','#283860');
+  gRect(ctx,47,70,29,34,'#182040','#283860');
+  // Very subtle dawn hint at bottom
+  gRect(ctx,16,96,60,8,'#283860','#3a4870');
+  // Mullions
+  R(ctx,45,32,2,72,'#706048');
+  R(ctx,16,68,60,2,'#706048');
+  // Frame highlight
+  R(ctx,14,30,1,76,'#807058');
+  R(ctx,14,30,64,1,'#807058');
+  // Stars through window
+  R(ctx,24,38,1,1,'#aaaacc');R(ctx,55,42,1,1,'#8888aa');R(ctx,32,78,1,1,'#7777aa');
+  R(ctx,62,85,1,1,'#9999bb');R(ctx,40,50,1,1,'#6666aa');
+  // Window sill
+  R(ctx,12,106,68,4,'#807060');
+  R(ctx,12,106,68,1,'#908070');
+
+  // === NOTICE BOARD ===
+  R(ctx,252,30,52,50,'#906830');
+  gRect(ctx,254,32,48,46,'#a07838','#987030');
+  // Frame
+  R(ctx,252,30,52,2,'#604818');R(ctx,252,30,2,50,'#604818');
+  R(ctx,302,30,2,50,'#705828');R(ctx,252,78,52,2,'#705828');
+  // Papers pinned
+  R(ctx,258,36,18,14,'#e8e8e0');R(ctx,260,39,14,1,'#aaa');R(ctx,260,42,12,1,'#aaa');R(ctx,260,45,10,1,'#aaa');
+  R(ctx,266,34,2,2,'#cc3030'); // red pin
+  R(ctx,280,38,16,12,'#fff8c0');R(ctx,282,41,12,1,'#998');R(ctx,282,44,10,1,'#998');
+  R(ctx,287,36,2,2,'#3030cc'); // blue pin
+  R(ctx,258,54,20,18,'#c8e8f8');R(ctx,260,57,16,1,'#88a');R(ctx,260,60,14,1,'#88a');R(ctx,260,63,12,1,'#88a');R(ctx,260,66,8,1,'#88a');
+  R(ctx,267,52,2,2,'#cc3030'); // pin
+  R(ctx,282,54,14,18,'#f8d8b8');R(ctx,284,57,10,1,'#a86');R(ctx,284,60,10,1,'#a86');
+  R(ctx,288,52,2,2,'#30aa30'); // green pin
+
+  // === COAT RACK ===
+  // Wooden pole
+  shape(ctx,[[308,38],[311,38],[311,112],[308,112]],'#5a4428');
+  R(ctx,308,38,3,1,'#6a5438');
+  // Hooks
+  shape(ctx,[[305,42],[312,42],[314,44],[312,46],[305,46]],'#888');
+  shape(ctx,[[305,52],[312,52],[314,54],[312,56],[305,56]],'#888');
+  // Rope hanging from hook
+  ctx.beginPath();
+  ctx.arc(309,62,5,0.2,Math.PI*1.8);
+  ctx.strokeStyle='#a08838';ctx.lineWidth=2;ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(309,62,7,0.5,Math.PI*1.6);
+  ctx.strokeStyle='#887028';ctx.lineWidth=1.5;ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(309,62,3,0,Math.PI*1.5);
+  ctx.strokeStyle='#b09848';ctx.lineWidth=1;ctx.stroke();
+
+  // === DOOR ===
+  // Door recess
+  R(ctx,135,25,42,89,'#a89070');
+  // Door
+  gRect(ctx,137,27,38,87,'#7a5830','#6a4820',false);
+  // Door panels (raised)
+  gRect(ctx,141,32,14,36,'#8a6838','#7a5828');
+  gRect(ctx,159,32,13,36,'#8a6838','#7a5828');
+  gRect(ctx,141,73,14,36,'#8a6838','#7a5828');
+  gRect(ctx,159,73,13,36,'#8a6838','#7a5828');
+  // Panel edges (light top-left, dark bottom-right)
+  for(const [px,py,pw,ph] of [[141,32,14,36],[159,32,13,36],[141,73,14,36],[159,73,13,36]]) {
+    R(ctx,px,py,pw,1,'#9a7848');R(ctx,px,py,1,ph,'#9a7848');
+    R(ctx,px+pw-1,py,1,ph,'#5a3818');R(ctx,px,py+ph-1,pw,1,'#5a3818');
+  }
+  // Door handle
+  ctx.beginPath();ctx.arc(168,75,2,0,Math.PI*2);ctx.fillStyle='#c8b830';ctx.fill();
+  ctx.strokeStyle='#a89820';ctx.lineWidth=0.5;ctx.stroke();
+  // Keyhole
+  R(ctx,167,79,2,3,'#2a2a2a');
+  // EXIT sign
+  R(ctx,145,20,28,7,'#1a8a1a');
+  gRect(ctx,145,20,28,3,'#2aaa2a','#1a8a1a');
+  ctx.font='5px monospace';ctx.fillStyle='#e0ffe0';ctx.fillText('EXIT',150,26);
+  // Door frame
+  R(ctx,135,25,2,89,'#604828');R(ctx,175,25,2,89,'#604828');R(ctx,135,25,42,2,'#604828');
+
+  // === FILING CABINET ===
+  gRect(ctx,2,80,30,34,'#808888','#707878');
+  R(ctx,2,80,30,1,'#909898');R(ctx,2,80,1,34,'#909898');
+  R(ctx,31,80,1,34,'#606868');R(ctx,2,113,30,1,'#606868');
+  // Drawers
+  for(let dy=0;dy<3;dy++) {
+    const yy=82+dy*10;
+    R(ctx,5,yy,24,9,'#748080');
+    R(ctx,5,yy,24,1,'#889090');
+    R(ctx,5,yy+8,24,1,'#606868');
+    R(ctx,14,yy+3,6,3,'#a0a8a8'); // handle
+    R(ctx,14,yy+3,6,1,'#b0b8b8');
+  }
+
+  // === DESK ===
+  // Desk top surface
+  shape(ctx,[[4,113],[180,113],[178,117],[2,117]],'#6a4420');
+  gRect(ctx,4,113,176,2,'#7a5430','#6a4420');
+  R(ctx,4,113,176,1,'#8a6440');
+  // Desk front panel
+  gRect(ctx,6,117,172,28,'#5a3410','#4a2808');
+  R(ctx,6,117,172,1,'#6a4420');
+  // Drawer handles on desk
+  R(ctx,30,128,12,2,'#7a5a30');R(ctx,90,128,12,2,'#7a5a30');R(ctx,150,128,12,2,'#7a5a30');
+  // Desk legs
+  R(ctx,8,145,5,11,'#4a2808');R(ctx,170,145,5,11,'#4a2808');
+
+  // === DESK OBJECTS ===
+  // Phone
+  R(ctx,22,102,20,11,'#1a1a1a');
+  R(ctx,24,100,16,3,'#222');
+  // Handset cradle
+  shape(ctx,[[20,98],[26,96],[26,100],[20,100]],'#1a1a1a');
+  shape(ctx,[[38,98],[44,96],[44,100],[38,100]],'#1a1a1a');
+  // Handset
+  shape(ctx,[[21,95],[24,95],[26,98],[38,98],[40,95],[43,95],[43,97],[38,100],[26,100],[21,97]],'#222');
+  R(ctx,22,96,3,1,'#333');R(ctx,39,96,3,1,'#333');
+  // Phone red light
+  R(ctx,30,104,4,2,'#cc0000');
+  R(ctx,31,104,2,1,'#ff2020');
+  // Dial buttons
+  for(let bx=0;bx<3;bx++) for(let by=0;by<3;by++) {
+    R(ctx,26+bx*4,106+by*2,2,1,'#333');
+  }
+
+  // Radio
+  R(ctx,50,104,18,9,'#2a2a2a');
+  gRect(ctx,52,105,14,6,'#3a3a3a','#2a2a2a');
+  R(ctx,50,99,2,5,'#444'); // antenna
+  R(ctx,50,98,3,2,'#555');
+  R(ctx,55,110,8,3,'#3a3a3a');
+  R(ctx,57,111,4,1,'#555');
+
+  // Coffee mug
+  shape(ctx,[[85,105],[93,105],[92,112],[86,112]],'#e0e0d8');
+  shape(ctx,[[93,106],[96,107],[96,110],[93,111]],'#e0e0d8');
+  R(ctx,86,106,6,1,'#f0f0e8'); // rim highlight
+  // Coffee inside
+  shape(ctx,[[86,107],[92,107],[92,111],[86,111]],'#4a2008');
+  R(ctx,87,107,4,1,'#5a3018'); // coffee surface highlight
+
+  // Papers
+  R(ctx,100,106,22,7,'#eeeee4');R(ctx,101,106,20,1,'#f4f4ee');
+  R(ctx,103,108,16,1,'#bbb');R(ctx,103,110,14,1,'#bbb');
+  R(ctx,105,107,8,6,'#e8e8de');  // overlapping paper
+  R(ctx,107,109,5,1,'#bbb');
+
+  // Fruit bowl with apple
+  ctx.beginPath();ctx.ellipse(78,112,8,3,0,0,Math.PI);ctx.fillStyle='#8a7a58';ctx.fill();
+  ctx.beginPath();ctx.ellipse(78,109,7,4,0,0,Math.PI*2);ctx.fillStyle='#cc2020';ctx.fill();
+  // Apple highlight
+  R(ctx,76,107,2,1,'#e83838');
+  // Stem
+  R(ctx,78,105,1,3,'#3a6a1a');
+  // Leaf
+  R(ctx,79,105,2,1,'#4a8a2a');
+
+  // === CHAIR (behind desk, visible above) ===
+  R(ctx,60,98,24,4,'#2a2a2a');
+  gRect(ctx,62,86,20,12,'#333','#2a2a2a');
+  R(ctx,62,86,20,1,'#444');
+  R(ctx,64,79,16,7,'#2a2a2a');
+  R(ctx,64,79,16,1,'#3a3a3a');
+
+  // === FLOOR DETAILS ===
+  // Wastepaper basket
+  shape(ctx,[[188,140],[200,140],[198,156],[190,156]],'#606058');
+  R(ctx,188,140,12,1,'#707068');
+  // Crumpled paper in basket
+  R(ctx,191,142,4,3,'#ddd');R(ctx,193,144,3,2,'#ccc');
+
+  ctx.restore();
+}
+
+// ============================================================
+// SCENE 2: M25 MOTORWAY AT DAWN
+// ============================================================
+function drawMotorway(ctx) {
+  const W=320, H=156;
+  ctx.save();
+
+  // === SKY — Rich dawn gradient ===
+  gRect(ctx,0,0,W,20,'#0a0818','#141028');
+  gRect(ctx,0,20,W,15,'#141028','#28183a');
+  gRect(ctx,0,35,W,10,'#28183a','#482838');
+  gRect(ctx,0,45,W,8,'#482838','#804028');
+  gRect(ctx,0,53,W,5,'#804028','#c06828');
+  gRect(ctx,0,58,W,4,'#c06828','#e89038');
+  gRect(ctx,0,62,W,3,'#e89038','#f0a848');
+  // Sun glow on horizon
+  glow(ctx,200,65,50,'rgba(248,180,80,0.3)','rgba(248,180,80,0)');
+  glow(ctx,200,65,25,'rgba(255,210,120,0.2)','rgba(255,210,120,0)');
+
+  // Wispy clouds
+  for(const [cx,cy,cw] of [[50,20,40],[150,15,35],[260,25,30],[100,35,25]]) {
+    ctx.fillStyle='rgba(60,40,50,0.3)';
+    ctx.beginPath();ctx.ellipse(cx,cy,cw,3,0,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='rgba(80,50,60,0.2)';
+    ctx.beginPath();ctx.ellipse(cx+5,cy-1,cw*0.7,2,0,0,Math.PI*2);ctx.fill();
+  }
+
+  // === TREE LINE ===
+  for(let tx=0;tx<W;tx++) {
+    const th = 5 + Math.sin(tx*0.08)*3 + Math.sin(tx*0.2)*2 + Math.cos(tx*0.35)*1.5;
+    const baseY = 64;
+    for(let ty=0;ty<th;ty++) {
+      const dark = ty/th;
+      const r=10+dark*12, g=28+dark*16, b=8+dark*8;
+      ctx.fillStyle=`rgb(${Math.floor(r)},${Math.floor(g)},${Math.floor(b)})`;
+      ctx.fillRect(tx, baseY-th+ty, 1, 1);
+    }
+  }
+  // Tree trunks (occasional)
+  for(const ttx of [30,75,128,195,250,290]) {
+    R(ctx,ttx,60,2,6,'#1a1008');
+  }
+
+  // === GREEN EMBANKMENT (left) ===
+  // Curved organic shape for verge
+  shape(ctx,
+    [[0,68],[40,68],[50,68,60,70,75,72],[85,76,90,82,90,90],[90,H],[0,H]],
+    '#1a4010');
+  // Lighter grass layer
+  shape(ctx,
+    [[0,70],[35,70],[45,70,55,72,68,75],[78,78,82,84,84,92],[84,H],[0,H]],
+    '#1e4a14');
+  // Grass highlight
+  shape(ctx,
+    [[0,72],[30,72],[38,72,48,74,58,78],[65,80,70,88,70,94],[70,H],[0,H]],
+    '#225018');
+  // Individual grass blades
+  for(let gx=2;gx<80;gx+=2) {
+    const gy = 70 + (gx/80)*20 + Math.sin(gx*0.5)*2;
+    if(gy<H-4) {
+      ctx.fillStyle = Math.random()>0.5 ? '#2a6020' : '#1a4a10';
+      ctx.fillRect(gx, gy, 1, 2+Math.floor(Math.random()*2));
+    }
+  }
+
+  // Fence posts and wire
+  for(let fx=8;fx<68;fx+=12) {
+    const fy = 70 + (fx/80)*16;
+    R(ctx,fx,fy-8,2,12,'#5a4020');
+    R(ctx,fx,fy-8,2,1,'#6a5030');
+  }
+  // Wire
+  curveLine(ctx, [[8,68],[20,69],[32,71],[44,73],[56,75],[65,77]], '#5a4020', 1);
+  curveLine(ctx, [[8,72],[20,73],[32,75],[44,77],[56,79],[65,81]], '#5a4020', 1);
+
+  // Fence gap
+  R(ctx,56,74,12,1,'#225018');
+
+  // Ponies in field (tiny, distant)
+  for(const [px,py] of [[15,73],[28,75],[42,72]]) {
+    R(ctx,px,py,4,3,'#8a6a08');R(ctx,px-1,py,2,2,'#8a6a08');
+    R(ctx,px,py+3,1,1,'#6a5008');R(ctx,px+2,py+3,1,1,'#6a5008');
+  }
+
+  // === ROAD SURFACE ===
+  gRect(ctx,78,68,W-78,H-68,'#484848','#3a3a3a');
+  // Road texture
+  for(let rx=80;rx<W;rx+=3) {
+    for(let ry=70;ry<H;ry+=4) {
+      if(Math.random()<0.15) {
+        ctx.fillStyle=`rgba(${50+Math.random()*20},${50+Math.random()*20},${50+Math.random()*20},0.5)`;
+        ctx.fillRect(rx,ry,2,1);
+      }
+    }
+  }
+
+  // Edge line (left)
+  R(ctx,80,68,2,H-68,'#ddd');
+
+  // Lane markings
+  for(let ly=72;ly<H;ly+=14) {
+    R(ctx,148,ly,2,7,'#ccc');
+    R(ctx,218,ly,2,7,'#ccc');
+  }
+
+  // Hard shoulder line (right)
+  R(ctx,288,68,2,H-68,'#ddd');
+
+  // === CRASH BARRIER (right) ===
+  for(let bx=292;bx<W;bx+=16) {
+    gRect(ctx,bx,75,3,H-75,'#9a9a9a','#7a7a7a');
+    R(ctx,bx,75,3,1,'#b0b0b0');
+  }
+  R(ctx,292,85,W-292,3,'#b0b0b0');R(ctx,292,86,W-292,1,'#888');
+  R(ctx,292,100,W-292,3,'#b0b0b0');R(ctx,292,101,W-292,1,'#888');
+  R(ctx,292,115,W-292,3,'#b0b0b0');R(ctx,292,116,W-292,1,'#888');
+  // Green beyond barrier
+  gRect(ctx,298,68,22,7,'#484848','#1a4010');
+
+  // === ROAD CLOSURE ===
+  // Cones
+  for(const cx of [92,102,112,122]) {
+    shape(ctx,[[cx,95],[cx+4,95],[cx+3,88],[cx+1,88]],'#e84400');
+    R(ctx,cx+1,90,2,1,'#ffaa00');
+    R(ctx,cx-1,95,6,2,'#444');
+  }
+  // Chevron sign
+  R(ctx,85,78,16,12,'#333');
+  for(let sx=0;sx<4;sx++) {
+    R(ctx,87+sx*3,80+sx,2,2,'#ffaa00');
+    R(ctx,87+sx*3,86-sx,2,2,'#ffaa00');
+  }
+
+  // === POLICE CAR 1 ===
+  drawPoliceCar2(ctx, 130, 98);
+
+  // === POLICE CAR 2 (further) ===
+  drawPoliceCar2(ctx, 245, 105);
+
+  // === ROAD MARKINGS ON SURFACE ===
+  // Subtle "SLOW" painted on road (very faded)
+  ctx.font='6px monospace';ctx.fillStyle='rgba(200,200,200,0.2)';
+  ctx.fillText('SLOW',170,140);
+
+  ctx.restore();
+}
+
+function drawPoliceCar2(ctx, x, y) {
+  // More detailed police car side view
+  // Body
+  shape(ctx,[[x,y+12],[x+2,y+4],[x+8,y+2],[x+28,y+2],[x+34,y+4],[x+36,y+12]],
+    '#e8e8e8');
+  // Roof
+  shape(ctx,[[x+8,y+2],[x+12,y-2],[x+24,y-2],[x+28,y+2]],'#d8d8d8');
+  // Windows
+  shape(ctx,[[x+9,y+2],[x+12,y-1],[x+17,y-1],[x+17,y+8]],'#2a4a7a');
+  shape(ctx,[[x+19,y-1],[x+24,y-1],[x+27,y+2],[x+27,y+8],[x+19,y+8]],'#2a4a7a');
+  // Light bar
+  R(ctx,x+14,y-3,4,2,'#3333dd');
+  R(ctx,x+19,y-3,4,2,'#3333dd');
+  // POLICE stripe
+  R(ctx,x+2,y+7,32,2,'#1a2a80');
+  // Wheels
+  ctx.beginPath();ctx.arc(x+8,y+13,3,0,Math.PI*2);ctx.fillStyle='#1a1a1a';ctx.fill();
+  ctx.beginPath();ctx.arc(x+8,y+13,1.5,0,Math.PI*2);ctx.fillStyle='#444';ctx.fill();
+  ctx.beginPath();ctx.arc(x+28,y+13,3,0,Math.PI*2);ctx.fillStyle='#1a1a1a';ctx.fill();
+  ctx.beginPath();ctx.arc(x+28,y+13,1.5,0,Math.PI*2);ctx.fillStyle='#444';ctx.fill();
+  // Headlights
+  R(ctx,x,y+6,2,3,'#f8f840');
+  R(ctx,x+34,y+6,2,3,'#cc2020');
+  // Text
+  ctx.font='3px monospace';ctx.fillStyle='#1a2a80';
+  ctx.fillText('POLICE',x+4,y+6);
+}
+
+// ============================================================
+// RENDER ALL
+// ============================================================
+const SCALE = 3;
+
+// Characters
+const charRow = document.getElementById('charRow');
+{
+  const c=makePanel(charRow,'Paul Anthem (Style C)',40,36,SCALE*2);
+  gRect(c,0,0,40,36,'#c0a480','#b09470');
+  R(c,0,30,40,6,'#7a7870');
+  drawSprite(c, PAUL, P_PAL, 12, 5);
+}
+{
+  const c=makePanel(charRow,'Shetland Pony (new)',44,28,SCALE*2);
+  R(c,0,0,44,28,'#484848');
+  R(c,0,24,44,4,'#3a3a3a');
+  for(let lx=0;lx<44;lx+=10) R(c,lx,22,5,1,'#ccc');
+  drawSprite(c, PONY, PO_PAL, 8, 5);
+}
+{
+  const c=makePanel(charRow,'H&H Journalist',40,36,SCALE*2);
+  gRect(c,0,0,40,36,'#5a7a4a','#4a6a3a');
+  R(c,0,30,40,6,'#7a7a70');
+  drawSprite(c, JOURNALIST, J_PAL, 12, 6);
+}
+{
+  // Paul + Pony together on road
+  const c=makePanel(charRow,'Scale reference (on road)',80,50,SCALE*1.5);
+  R(c,0,0,80,50,'#484848');
+  for(let ly=10;ly<50;ly+=14) R(c,38,ly,2,7,'#ccc');
+  R(c,0,0,15,50,'#225018');
+  drawSprite(c, PAUL, P_PAL, 30, 18);
+  drawSprite(c, PONY, PO_PAL, 48, 26);
+}
+
+// Station
+const stationRow = document.getElementById('stationRow');
+{
+  const c=makePanel(stationRow,'Police Station — PQ2 VGA style (320x156)',320,156,SCALE);
+  drawStation(c);
+  // Draw Paul in the scene
+  drawSprite(c, PAUL, P_PAL, 100, 124);
+}
+
+// Motorway
+const motorwayRow = document.getElementById('motorwayRow');
+{
+  const c=makePanel(motorwayRow,'M25 at Dawn — PQ2 VGA style (320x156)',320,156,SCALE);
+  drawMotorway(c);
+  // Draw Paul and pony
+  drawSprite(c, PAUL, P_PAL, 152, 118);
+  drawSprite(c, PONY, PO_PAL, 195, 112);
+}
+
+</script>
+</body>
+</html>
