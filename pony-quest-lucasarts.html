@@ -1,0 +1,1340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pony Quest: The Secret of the M25</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;display:flex;justify-content:center;align-items:center;height:100vh;overflow:hidden}
+canvas{image-rendering:pixelated;image-rendering:crisp-edges;cursor:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+
+// ============================================================
+//  PONY QUEST: The Secret of the M25
+//  A LucasArts-style (SCUMM 9-verb) remake of the M25 incident.
+//  320x200, VGA-dithered backgrounds, speech above heads.
+// ============================================================
+
+const W = 320, H = 200;
+const SCENE_H = 144;          // playfield height
+const SENT_Y = 146;           // sentence line baseline area
+const UI_Y = 156;             // verb grid / inventory top
+const WALK_SPEED = 1.1;
+
+// ===== CANVAS =====
+const display = document.getElementById('c');
+const dctx = display.getContext('2d');
+const buf = document.createElement('canvas');
+buf.width = W; buf.height = H;
+const fctx = buf.getContext('2d');
+const bg = document.createElement('canvas');
+bg.width = W; bg.height = SCENE_H;
+const bgctx = bg.getContext('2d');
+
+let cx_ = fctx; // current draw target (swapped to bgctx for prerender)
+
+function resize() {
+  const s = Math.max(1, Math.floor(Math.min(window.innerWidth / W, window.innerHeight / H)));
+  display.width = W * s; display.height = H * s;
+  dctx.imageSmoothingEnabled = false;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ===== DRAW HELPERS =====
+function R(x,y,w,h,c) { cx_.fillStyle=c; cx_.fillRect(x,y,w,h); }
+// banded gradient with dithered seams — the VGA sky look
+function DGRAD(x,y,w,h,cols) {
+  const n=cols.length, bh=h/n;
+  for(let i=0;i<n;i++) R(x, Math.floor(y+i*bh), w, Math.ceil(bh)+1, cols[i]);
+  for(let i=1;i<n;i++) {
+    const by=Math.floor(y+i*bh);
+    cx_.fillStyle=cols[i-1];
+    for(let r=0;r<2;r++) {
+      const yy=by+r;
+      if(yy>=y+h) break;
+      for(let xx=x+((yy+r)&1); xx<x+w; xx+=2) cx_.fillRect(xx,yy,1,1);
+    }
+  }
+}
+function wrapText(t, max) {
+  const words=t.split(' '), lines=[];
+  let cur='';
+  for(const w of words) {
+    if((cur+' '+w).trim().length>max) { lines.push(cur.trim()); cur=w; }
+    else cur+=' '+w;
+  }
+  if(cur.trim()) lines.push(cur.trim());
+  return lines;
+}
+function outlineText(t, x, y, c, align) {
+  cx_.font='bold 8px monospace';
+  cx_.textAlign=align||'center';
+  cx_.fillStyle='#000';
+  cx_.fillText(t,x-1,y); cx_.fillText(t,x+1,y);
+  cx_.fillText(t,x,y-1); cx_.fillText(t,x,y+1);
+  cx_.fillStyle=c;
+  cx_.fillText(t,x,y);
+  cx_.textAlign='left';
+}
+
+// ===== GAME STATE =====
+const G = {
+  screen: 'title',
+  scene: 1,
+  inventory: [],
+  flags: {},
+  player: { x:160, y:134, tx:160, ty:134, frame:0, walking:false, action:null, visible:true },
+  pony: { x:200, y:92, tx:200, ty:92, frame:0, timer:0, state:'trot' },
+  sayQ: [],            // queue of {actor,text,cb}
+  sayCur: null,        // {actor,lines,timer,cb}
+  dialog: null,        // {choices:[{label,val}],hover,cb}
+  walkCB: null,
+  transition: 0,
+  nextScene: 0,
+  tick: 0,
+  journChoices: [],
+  hoverHot: null, hoverVerb: -1, hoverInv: -1, hoverChoice: -1,
+};
+
+// sentence-line state: selected verb + optional first (inventory) object
+const cur = { verb:null, item:null };
+function resetCur(){ cur.verb=null; cur.item=null; }
+
+// ===== VERBS (Monkey Island 9-verb grid) =====
+const VERBS = [
+  {id:'give',   label:'Give'},   {id:'pickup', label:'Pick up'}, {id:'use',  label:'Use'},
+  {id:'open',   label:'Open'},   {id:'lookat', label:'Look at'}, {id:'push', label:'Push'},
+  {id:'close',  label:'Close'},  {id:'talkto', label:'Talk to'}, {id:'pull', label:'Pull'},
+];
+const VLABEL = {}; for(const v of VERBS) VLABEL[v.id]=v.label;
+const DEFAULTS = {
+  give:   "I'd need to be holding something first.",
+  pickup: "I can't pick that up.",
+  use:    "I can't use that.",
+  open:   "It doesn't open.",
+  close:  "It doesn't close.",
+  push:   "It won't budge.",
+  pull:   "It won't budge.",
+  talkto: "I'd feel a bit silly talking to that.",
+  lookat: "Nothing special about it.",
+};
+
+// ===== INPUT =====
+let mx=0, my=0, clicked=false, rclicked=false;
+display.addEventListener('mousemove', e => {
+  const r = display.getBoundingClientRect();
+  mx = Math.floor((e.clientX - r.left) / (display.width / W));
+  my = Math.floor((e.clientY - r.top) / (display.height / H));
+});
+display.addEventListener('click', () => { clicked=true; });
+display.addEventListener('contextmenu', e => { e.preventDefault(); rclicked=true; });
+
+// ===== SPEECH (text above heads, LucasArts style) =====
+const VOICE = {
+  paul:   '#ffffff',
+  pony:   '#d8a838',
+  journ:  '#ff88cc',
+  phone:  '#ffff55',
+  radio:  '#ffff55',
+  cop:    '#88ddff',
+  narr:   '#55ffff',
+};
+function say(actor, text, cb) { G.sayQ.push({actor,text,cb:cb||null}); }
+function sayP(text, cb) { say('paul', text, cb); }
+function advanceSay() {
+  const c = G.sayCur;
+  G.sayCur = null;
+  if(c && c.cb) c.cb();
+}
+function updateSay() {
+  if(!G.sayCur && G.sayQ.length) {
+    const n = G.sayQ.shift();
+    G.sayCur = { actor:n.actor, lines:wrapText(n.text, 30), timer:Math.max(110, n.text.length*3.2), cb:n.cb };
+  }
+  if(G.sayCur) {
+    G.sayCur.timer--;
+    if(G.sayCur.timer<=0) advanceSay();
+  }
+}
+function sayBusy(){ return G.sayCur!==null || G.sayQ.length>0; }
+function actorAnchor(actor) {
+  switch(actor) {
+    case 'paul':  return {x:G.player.x, y:G.player.y-38};
+    case 'pony':  return {x:G.pony.x,   y:G.pony.y-26};
+    case 'journ': return {x:210, y:124-40};
+    case 'phone': return {x:36,  y:78};
+    case 'radio': return {x:60,  y:78};
+    case 'cop':   return {x:G.scene===2?115:40, y:G.scene===2?100:64};
+    case 'narr':  return {x:160, y:14};
+  }
+  return {x:160,y:14};
+}
+function drawSay() {
+  const s=G.sayCur;
+  if(!s) return;
+  const a=actorAnchor(s.actor);
+  cx_.font='bold 8px monospace';
+  let wmax=0;
+  for(const l of s.lines) wmax=Math.max(wmax, cx_.measureText(l).width);
+  let sx=Math.max(wmax/2+3, Math.min(W-wmax/2-3, a.x));
+  let sy=a.y - (s.lines.length-1)*9;
+  sy=Math.max(10, sy);
+  for(let i=0;i<s.lines.length;i++)
+    outlineText(s.lines[i], sx, sy+i*9, VOICE[s.actor]||'#fff');
+}
+
+// ===== DIALOG CHOICES (bottom panel, MI style) =====
+function showChoices(choices, cb) { G.dialog={choices, hover:-1, cb}; }
+
+// ===== INVENTORY =====
+function addItem(id,name,desc){ if(!G.inventory.find(i=>i.id===id)) G.inventory.push({id,name,desc}); }
+function hasItem(id){ return G.inventory.some(i=>i.id===id); }
+function removeItem(id){ G.inventory=G.inventory.filter(i=>i.id!==id); }
+
+function drawItemIcon(id,x,y) {
+  switch(id) {
+    case 'rope':
+      cx_.strokeStyle='#a08040'; cx_.lineWidth=2;
+      cx_.beginPath(); cx_.arc(x+5,y+5,3.5,0,Math.PI*1.7); cx_.stroke();
+      break;
+    case 'apple':
+      R(x+3,y+3,5,6,'#cc2222'); R(x+4,y+1,2,3,'#228822'); R(x+3,y+3,2,2,'#ee5555');
+      break;
+    case 'auth':
+      R(x+2,y+1,7,9,'#ddd'); R(x+3,y+3,5,1,'#666'); R(x+3,y+5,5,1,'#666'); R(x+3,y+7,3,1,'#666');
+      break;
+  }
+}
+
+// ===== SPRITES =====
+function drawPaul(px,py,frame,walking,action,talking) {
+  px=Math.floor(px); py=Math.floor(py);
+  const x=px-7, y=py-34;
+  // shadow
+  cx_.fillStyle='rgba(0,0,0,0.25)'; cx_.fillRect(x+1,py-1,12,2);
+  const f=Math.floor(frame)%4;
+  let ll=0, rl=0, al=0, ar=0;
+  if(walking){ if(f===0){ll=-2;rl=2;al=2;ar=-2;} else if(f===2){ll=2;rl=-2;al=-2;ar=2;} }
+  // legs (dark trousers)
+  R(x+3+ll, y+22, 4, 10, '#1a2744');
+  R(x+8+rl, y+22, 4, 10, '#1a2744');
+  // shoes
+  R(x+3+ll, y+32, 4, 2, '#0a0a0a');
+  R(x+8+rl, y+32, 4, 2, '#0a0a0a');
+  // torso: white police shirt
+  R(x+2, y+10, 11, 12, '#e8e8f0');
+  R(x+2, y+10, 11, 1, '#c8c8d8');
+  // epaulettes
+  R(x+2, y+10, 3, 2, '#1a2744'); R(x+10, y+10, 3, 2, '#1a2744');
+  // tie
+  R(x+7, y+10, 2, 8, '#10141f');
+  // belt
+  R(x+2, y+21, 11, 2, '#10141f'); R(x+6, y+21, 2, 2, '#888');
+  // arms
+  if(action==='phone') {
+    R(x-1, y+11, 3, 7, '#e8e8f0'); R(x, y+8, 3, 4, '#d8a878');     // hand to ear
+    R(x+12, y+12+ar, 3, 8, '#e8e8f0'); R(x+12, y+19+ar, 3, 2, '#d8a878');
+  } else if(action==='calm') {
+    R(x+12, y+12, 6, 3, '#e8e8f0'); R(x+17, y+12, 3, 3, '#d8a878'); // arm out
+    R(x-1, y+12, 3, 8, '#e8e8f0'); R(x-1, y+19, 3, 2, '#d8a878');
+  } else {
+    R(x-1, y+11+al, 3, 9, '#e8e8f0'); R(x-1, y+19+al, 3, 2, '#d8a878');
+    R(x+12, y+11+ar, 3, 9, '#e8e8f0'); R(x+12, y+19+ar, 3, 2, '#d8a878');
+  }
+  // head
+  R(x+3, y+4, 9, 7, '#d8a878');
+  // eyes (blink)
+  if(G.tick%140>8) { R(x+5,y+6,1,1,'#222'); R(x+9,y+6,1,1,'#222'); }
+  // mouth (talk flap)
+  if(talking && Math.floor(G.tick/6)%2) R(x+6,y+9,3,1,'#7a4a3a');
+  // peaked cap
+  R(x+2, y, 11, 4, '#16243f');
+  R(x+1, y+3, 13, 2, '#0c1322');
+  R(x+7, y+1, 1, 2, '#c0c0d0'); // badge
+}
+
+function drawPonySprite(px,py,frame,state) {
+  px=Math.floor(px); py=Math.floor(py);
+  const x=px-14, y=py-20;
+  cx_.fillStyle='rgba(0,0,0,0.2)'; cx_.fillRect(x+3,py-1,22,2);
+  const f=Math.floor(frame)%4;
+  let fl=0, bl=0;
+  if(state==='trot'||state==='approach'){ if(f<2){fl=-1;bl=1;}else{fl=1;bl=-1;} }
+  // legs
+  R(x+7+fl,  y+14, 3, 5, '#8a6a0a');
+  R(x+11+bl, y+14, 3, 5, '#8a6a0a');
+  R(x+17+fl, y+14, 3, 5, '#8a6a0a');
+  R(x+21+bl, y+14, 3, 5, '#8a6a0a');
+  // hooves
+  R(x+7+fl,y+19,3,1,'#333'); R(x+11+bl,y+19,3,1,'#333');
+  R(x+17+fl,y+19,3,1,'#333'); R(x+21+bl,y+19,3,1,'#333');
+  // body
+  R(x+5, y+4, 18, 11, '#b8860b');
+  R(x+5, y+4, 18, 2, '#cfa02a'); // back highlight
+  R(x+5, y+13, 18, 2, '#8f6a08');
+  // tail
+  R(x+23, y+3, 4, 7, '#5a3a1a'); R(x+25, y+9, 2, 4, '#5a3a1a');
+  // head
+  R(x-1, y+1, 8, 8, '#b8860b');
+  R(x-1, y+6, 4, 4, '#a07408'); // muzzle
+  // mane
+  R(x+4, y-2, 6, 5, '#5a3a1a'); R(x+8, y+1, 4, 4, '#5a3a1a');
+  // ear
+  R(x+1, y-2, 2, 3, '#b8860b');
+  // eye
+  R(x+1, y+3, 2, 2, '#111');
+  // munching jaw when eating
+  if(state==='eating' && Math.floor(G.tick/10)%2) R(x-1,y+9,4,1,'#8a6a0a');
+  // rope to Paul
+  if(state==='roped'||state==='calm') {
+    cx_.strokeStyle='#a08040'; cx_.lineWidth=1;
+    cx_.beginPath();
+    cx_.moveTo(x+3, y+6);
+    cx_.lineTo(G.player.x+6, G.player.y-15);
+    cx_.stroke();
+  }
+}
+
+function drawJournalist(jx,jy,talking) {
+  jx=Math.floor(jx); jy=Math.floor(jy);
+  const x=jx-7, y=jy-34;
+  cx_.fillStyle='rgba(0,0,0,0.25)'; cx_.fillRect(x+1,jy-1,12,2);
+  // legs (khaki)
+  R(x+3, y+22, 4, 10, '#8a7a5a'); R(x+8, y+22, 4, 10, '#8a7a5a');
+  R(x+3, y+32, 4, 2, '#4a3a2a'); R(x+8, y+32, 4, 2, '#4a3a2a');
+  // green jacket
+  R(x+2, y+10, 11, 12, '#2a6a2a');
+  R(x+2, y+10, 11, 1, '#3a8a3a');
+  // arms; right hand holds notepad
+  R(x-1, y+11, 3, 9, '#2a6a2a'); R(x-1, y+19, 3, 2, '#d8a878');
+  R(x+12, y+11, 3, 6, '#2a6a2a');
+  R(x+13, y+15, 6, 8, '#f0f0e8'); // notepad
+  R(x+14, y+17, 4, 1, '#888'); R(x+14, y+19, 4, 1, '#888');
+  const scrib = talking && Math.floor(G.tick/8)%2 ? 1:0;
+  R(x+15+scrib, y+20, 2, 2, '#d8a878'); // scribbling hand
+  // head
+  R(x+3, y+4, 9, 7, '#d8a878');
+  if(G.tick%170>8) { R(x+5,y+6,1,1,'#222'); R(x+9,y+6,1,1,'#222'); }
+  if(talking && Math.floor(G.tick/6)%2) R(x+6,y+9,3,1,'#9a4a4a');
+  // blonde hair
+  R(x+2, y, 11, 5, '#d4a030');
+  R(x+1, y+3, 3, 6, '#d4a030'); R(x+11, y+3, 3, 6, '#d4a030');
+}
+
+function drawPoliceCarBody(x,y) {
+  R(x, y, 38, 14, '#f0f0f0');
+  R(x+2, y-4, 26, 5, '#e8e8e8');             // cab
+  R(x+4, y-3, 10, 4, '#3a5a8a');             // windows
+  R(x+16, y-3, 10, 4, '#3a5a8a');
+  R(x, y+5, 38, 3, '#2040a0');               // blue stripe
+  cx_.font='bold 5px monospace'; cx_.fillStyle='#2040a0';
+  cx_.fillText('POLICE', x+6, y+4);
+  R(x+4, y+11, 7, 5, '#1a1a1a'); R(x+6, y+13, 3, 2, '#555');   // wheels
+  R(x+27, y+11, 7, 5, '#1a1a1a'); R(x+29, y+13, 3, 2, '#555');
+}
+function drawCarLights(x,y) {
+  const f1 = Math.floor(G.tick/8)%2===0;
+  R(x+10, y-6, 5, 2, f1?'#5555ff':'#222266');
+  R(x+16, y-6, 5, 2, f1?'#222266':'#5555ff');
+}
+
+// ============================================================
+//  BACKGROUNDS (prerendered to bg canvas on scene init)
+// ============================================================
+
+function renderBG(n) {
+  cx_ = bgctx;
+  cx_.clearRect(0,0,W,SCENE_H);
+  if(n===1) renderStation();
+  else if(n===2) renderMotorway();
+  else renderPress();
+  cx_ = fctx;
+}
+
+// --- Scene 1: Thames Valley Police station office, 6:30 AM ---
+function renderStation() {
+  // ceiling
+  R(0,0,W,8,'#d0d0c8');
+  R(110,3,100,3,'#ffffee'); R(110,2,100,1,'#fff'); // strip light
+  // wall, warm plaster with dither shading
+  DGRAD(0,8,W,88,['#cdb088','#c4a882','#b89c78']);
+  R(0,93,W,3,'#6a5a42'); // skirting
+  // floor: dithered lino tiles
+  DGRAD(0,96,W,SCENE_H-96,['#8e8e84','#84847a','#7a7a72']);
+  for(let ty=98;ty<SCENE_H;ty+=14)
+    for(let tx=(ty/14|0)%2*10;tx<W;tx+=20)
+      R(tx,ty,19,1,'#9a9a90');
+  // -- window (left) --
+  R(12,18,64,64,'#5a4a32');
+  R(16,22,56,56,'#141c3c');
+  DGRAD(16,22,26,26,['#141c3c','#1c2850']);
+  DGRAD(46,22,26,26,['#141c3c','#1c2850']);
+  DGRAD(16,52,26,26,['#1c2850','#2c3866']);
+  DGRAD(46,52,26,26,['#1c2850','#2c3866']);
+  R(42,22,4,56,'#5a4a32'); R(16,48,56,4,'#5a4a32');
+  R(24,30,1,1,'#aab'); R(60,34,1,1,'#aab'); R(34,64,1,1,'#889'); R(54,70,1,1,'#778');
+  // moon sliver
+  R(64,26,3,3,'#e8e8d0'); R(63,27,1,1,'#e8e8d0');
+  // -- door (centre) --
+  R(130,18,42,8,'#1a7a2a'); cx_.font='bold 6px monospace'; cx_.fillStyle='#cfc';
+  cx_.fillText('EXIT',143,24);
+  R(130,26,42,70,'#4a3018');
+  R(133,29,36,64,'#6a4a2a');
+  R(136,32,14,26,'#583c20'); R(153,32,13,26,'#583c20');
+  R(136,62,14,28,'#583c20'); R(153,62,13,28,'#583c20');
+  R(164,60,4,5,'#c8c8b0'); // handle
+  // -- clock --
+  cx_.beginPath(); cx_.arc(218,34,10,0,Math.PI*2); cx_.fillStyle='#ece8d8'; cx_.fill();
+  cx_.strokeStyle='#3a2a1a'; cx_.lineWidth=2; cx_.stroke();
+  cx_.strokeStyle='#222'; cx_.lineWidth=1;
+  cx_.beginPath(); cx_.moveTo(218,34); cx_.lineTo(218,41); cx_.stroke();  // minute: 6
+  cx_.beginPath(); cx_.moveTo(218,34); cx_.lineTo(213,37); cx_.stroke();  // hour: ~6:30
+  // -- notice board --
+  R(238,24,60,44,'#6a5030');
+  R(241,27,54,38,'#a08050');
+  R(245,31,16,12,'#f0ead8'); R(251,32,1,1,'#c22');
+  R(265,33,20,10,'#ffe9a8'); R(274,34,1,1,'#22c');
+  R(247,47,13,14,'#a8d4f0'); R(252,48,1,1,'#c22');
+  R(266,46,22,16,'#f0d8a8'); R(276,47,1,1,'#2a2');
+  // -- coat rack (right wall) with rope --
+  R(300,46,4,50,'#5a4a32');
+  R(292,46,14,4,'#5a4a32');
+  // -- filing cabinet (right of door) --
+  R(176,56,30,40,'#8a8a92');
+  R(176,56,30,2,'#aaaab2'); R(176,56,2,40,'#aaaab2');
+  for(let d=0;d<3;d++) {
+    R(180,61+d*12,22,9,'#76767e');
+    R(187,64+d*12,8,2,'#aaa');
+  }
+  // -- desk --
+  R(8,96,114,7,'#6a4a26');
+  R(8,96,114,2,'#845e34');
+  R(10,103,110,22,'#4a2e10');
+  R(10,103,110,2,'#5e3c1c');
+  R(13,125,5,8,'#3a2408'); R(112,125,5,8,'#3a2408');
+  // chair behind desk
+  R(56,86,22,6,'#26262e'); R(60,72,14,15,'#30303a');
+  // on-desk statics: papers
+  R(98,90,18,7,'#e8e8e0'); R(100,92,14,1,'#aaa'); R(100,94,10,1,'#aaa');
+  // phone base
+  R(24,88,22,9,'#22222a'); R(26,86,18,3,'#33333d');
+  R(22,84,7,5,'#22222a'); R(41,84,7,5,'#22222a'); R(24,82,22,4,'#2a2a34');
+  // radio
+  R(54,86,16,11,'#2e2e36'); R(56,88,12,5,'#444450');
+  R(54,80,2,7,'#666'); R(60,93,6,3,'#555');
+  // fruit bowl
+  R(72,92,12,5,'#8a7a5a'); R(73,91,10,2,'#9a8a6a');
+  // coffee mug
+  R(86,89,8,8,'#ece8e0'); R(93,91,3,4,'#ece8e0');
+  R(87,90,6,3,'#5a3014');
+  // poster left of door
+  R(96,34,26,34,'#1a3a6a'); R(98,36,22,30,'#2a4a7a');
+  cx_.font='bold 5px monospace'; cx_.fillStyle='#cdf';
+  cx_.fillText('THAMES',100,44); cx_.fillText('VALLEY',100,51); cx_.fillText('POLICE',100,58);
+}
+
+// dynamic per-frame extras for scene 1
+function drawStationDyn() {
+  // phone light
+  const flash = G.flags.phoneRinging && Math.floor(G.tick/12)%2===0;
+  R(33,90,4,3, flash?'#ff2222':'#441111');
+  if(G.flags.phoneRinging && G.tick%160<55) outlineText('RRRING!', 36, 74, '#ffff66');
+  // rope on hook
+  if(!hasItem('rope') && !G.flags.ropeOnPony) {
+    cx_.strokeStyle='#a08040'; cx_.lineWidth=2;
+    cx_.beginPath(); cx_.arc(298,60,5,0,Math.PI*1.7); cx_.stroke();
+    cx_.strokeStyle='#806030';
+    cx_.beginPath(); cx_.arc(298,61,7,0.5,Math.PI*1.4); cx_.stroke();
+  }
+  // apple in bowl
+  if(!hasItem('apple') && !G.flags.appleGone) {
+    R(75,87,6,5,'#cc2222'); R(77,85,1,2,'#228822'); R(75,87,2,2,'#ee5555');
+  }
+}
+
+// --- Scene 2: M25 southbound, dawn ---
+function renderMotorway() {
+  // dawn sky
+  DGRAD(0,0,W,50,['#1a1038','#3a1c4e','#6a2a52','#a04848','#d4763e','#eda04e']);
+  // tree line
+  for(let tx=0;tx<W;tx+=7) {
+    const th=4+Math.sin(tx*0.31)*2.5+Math.cos(tx*0.73)*1.5;
+    R(tx,50-th,7,th+8,'#16301a');
+  }
+  // grass verge (left strip, full height)
+  DGRAD(0,56,90,SCENE_H-56,['#2a5a1a','#316522','#3a7a2a']);
+  for(let gx=0;gx<86;gx+=3)
+    for(let gy=58;gy<SCENE_H;gy+=5)
+      if((gx*7+gy*13)%11<3) R(gx,gy,1,2,'#2a6a1a');
+  // field beyond fence: a couple of smug ponies who did NOT escape
+  R(18,60,7,4,'#8a6a0a'); R(16,58,3,3,'#8a6a0a'); R(19,64,1,2,'#6a5008'); R(23,64,1,2,'#6a5008');
+  R(42,63,7,4,'#9a7a1a'); R(40,61,3,3,'#9a7a1a'); R(43,67,1,2,'#6a5008'); R(47,67,1,2,'#6a5008');
+  // fence with the escape gap (gap at x56..78)
+  for(let fx=6;fx<=80;fx+=14) {
+    if(fx>52 && fx<80) continue;
+    R(fx,60,3,22,'#6a5030'); R(fx,60,3,2,'#7e6240');
+  }
+  R(6,64,49,2,'#6a5030'); R(6,74,49,2,'#6a5030');
+  // broken rail ends at the gap
+  R(50,64,6,2,'#7e6240'); R(50,74,4,2,'#7e6240');
+  // road surface
+  DGRAD(90,56,W-90,SCENE_H-56,['#4e4e52','#48484c','#404044']);
+  // road texture flecks
+  for(let rx=92;rx<W;rx+=4)
+    for(let ry=58;ry<SCENE_H;ry+=6)
+      if((rx*13+ry*7)%17<2) R(rx,ry,1,1,'#56565a');
+  // edge line
+  R(90,56,3,SCENE_H-56,'#e8e8e8');
+  // lane dashes (road runs away from camera to the horizon)
+  for(let ly=58;ly<SCENE_H;ly+=14) {
+    R(148,ly,3,7,'#e8e8e8');
+    R(208,ly,3,7,'#e8e8e8');
+    R(268,ly,3,7,'#e8e8e8');
+  }
+  // hard shoulder line + crash barrier (right)
+  R(300,56,2,SCENE_H-56,'#e8e8e8');
+  for(let by=60;by<SCENE_H;by+=18) R(308,by,4,12,'#9a9aa2');
+  R(306,70,14,3,'#c0c0c8'); R(306,100,14,3,'#c0c0c8'); R(306,130,14,3,'#c0c0c8');
+  // closure signs
+  R(98,64,16,12,'#e85510'); R(100,66,12,8,'#ffb830');
+  cx_.font='bold 5px monospace'; cx_.fillStyle='#7a2a00'; cx_.fillText('M25',102,72);
+  R(104,76,3,14,'#666');
+  R(120,68,16,12,'#e85510'); R(122,70,12,8,'#ffb830');
+  cx_.fillStyle='#7a2a00'; cx_.fillText('SHUT',122,76);
+  R(126,80,3,12,'#666');
+  // cones
+  for(let cxn=112;cxn<156;cxn+=14) {
+    R(cxn,92,5,8,'#ff4400'); R(cxn,94,5,2,'#ffcc88');
+    R(cxn-2,100,9,2,'#444');
+  }
+  // police cars (bodies; lights drawn dynamic)
+  drawPoliceCarBody(96,116);
+  drawPoliceCarBody(238,124);
+}
+function drawMotorwayDyn() {
+  drawCarLights(96,116);
+  drawCarLights(238,124);
+  if(G.flags.applePlaced && !G.flags.appleEaten2) {
+    R(G.flags.appleX-2, G.flags.appleY-3, 5, 4, '#cc2222');
+    R(G.flags.appleX-1, G.flags.appleY-4, 1, 2, '#228822');
+  }
+}
+
+// --- Scene 3: hard shoulder press scrum, 7:20 AM ---
+function renderPress() {
+  DGRAD(0,0,W,38,['#4a3a7a','#8a5a6a','#d4804a','#f0b060']);
+  for(let tx=0;tx<W;tx+=6) {
+    const th=4+Math.sin(tx*0.4)*2;
+    R(tx,38-th,6,th+6,'#234a1c');
+  }
+  // distant carriageway
+  DGRAD(0,42,W,22,['#5e5e62','#56565a']);
+  for(let lx=0;lx<W;lx+=16) R(lx,52,8,2,'#d8d8d8');
+  // barrier
+  R(0,64,W,4,'#b0b0b8'); R(0,64,W,1,'#d0d0d8');
+  // hard shoulder
+  DGRAD(0,68,W,20,['#7e7e76','#74746c']);
+  // grass
+  DGRAD(0,88,W,SCENE_H-88,['#4a7a3a','#42703a','#3a663a']);
+  for(let gx=0;gx<W;gx+=4)
+    for(let gy=90;gy<SCENE_H;gy+=5)
+      if((gx*7+gy*13)%13<3) R(gx,gy,1,2,'#4a8a3a');
+  drawPoliceCarBody(16,76);
+  drawPoliceCarBody(64,80);
+}
+function drawPressDyn() {
+  drawCarLights(16,76);
+  drawCarLights(64,80);
+  // background traffic flowing again
+  const o=(G.tick*0.6)%(W+40);
+  R(o-20,46,10,4,'#c04040'); R((o+90)%(W+40)-20,48,12,4,'#4060c0');
+  R((o+180)%(W+40)-20,45,10,4,'#909090'); R((o+260)%(W+40)-20,49,12,4,'#40a050');
+}
+
+// ============================================================
+//  HOTSPOTS
+// ============================================================
+// Each hotspot: rect, stand point (sx,sy), per-verb handlers,
+// items{} for "Use X with / Give X to", rverb = right-click default.
+
+function getHotspots() {
+  switch(G.scene) {
+    case 1: return [
+      { id:'phone', label:'phone', x:20,y:80,w:30,h:18, sx:36,sy:128, rverb:'use',
+        lookat:()=>sayP(G.flags.phoneAnswered
+          ? "The desk phone. The red light has finally stopped flashing."
+          : "A standard-issue Thames Valley Police desk phone. The red light is flashing like it's personal."),
+        use:()=>answerPhone(), pickup:()=>answerPhone(), open:()=>sayP("It's a phone, not a sandwich."),
+        talkto:()=>sayP(G.flags.phoneAnswered ? "There's no one on the line now." : "Probably better to actually pick it up first."),
+      },
+      { id:'radio', label:'radio', x:52,y:78,w:20,h:20, sx:60,sy:128, rverb:'use',
+        lookat:()=>sayP("My police radio. It crackles with authority. Mostly crackles, actually."),
+        use:()=>useRadio(), talkto:()=>useRadio(),
+        pickup:()=>sayP("It stays on the desk. Health and safety did a whole seminar about it."),
+      },
+      { id:'coffee', label:'mug of coffee', x:84,y:87,w:13,h:11, sx:88,sy:128, rverb:'use',
+        lookat:()=>sayP("My morning coffee. Strong enough to arrest someone on its own."),
+        use:()=>sayP("Mmm. Tastes like duty."),
+        pickup:()=>sayP("If I carry it, I'll only end up spilling it on a pony. Trust me on this."),
+        push:()=>sayP("Careful! That's evidence. Of my caffeine problem."),
+      },
+      { id:'apple', label:'apple', x:70,y:84,w:16,h:13, sx:78,sy:128, rverb:'pickup',
+        lookat:()=>hasItem('apple')||G.flags.appleGone
+          ? sayP("An empty fruit bowl. The five-a-day plan is going badly.")
+          : sayP("A fresh red apple. I was saving it for lunch. Ponies famously love these."),
+        pickup:()=>{
+          if(hasItem('apple')||G.flags.appleGone) return sayP("The bowl is empty. Like my stomach will be at lunchtime.");
+          addItem('apple','apple','A fresh red apple. Crunchy. Tactically delicious.');
+          sayP("Sorry, lunch. You've been promoted to police equipment.");
+        },
+        use:()=>sayP("Not yet. I have a feeling someone four-legged will want this more than I do."),
+      },
+      { id:'window', label:'window', x:12,y:18,w:64,h:64, sx:44,sy:128, rverb:'lookat',
+        lookat:()=>sayP("Pre-dawn darkness. Somewhere out there is the M25, and somewhere on it, apparently, is a Shetland pony."),
+        open:()=>sayP("Painted shut since 1987. Budget cuts."),
+        use:()=>sayP("I can see myself in the reflection. Looking sharp, Anthem. Looking sharp."),
+      },
+      { id:'clock', label:'clock', x:206,y:22,w:24,h:24, sx:218,sy:128, rverb:'lookat',
+        lookat:()=>sayP("Half past six in the morning. Friday the tenth of October, 2003. Far too early for equine emergencies."),
+        use:()=>sayP("I can't turn back time. Believe me, I've tried at every Monday briefing."),
+        push:()=>sayP("Time flies on its own, thanks."),
+        pull:()=>sayP("Pulling the clock will not delay rush hour."),
+      },
+      { id:'board', label:'notice board', x:238,y:24,w:60,h:44, sx:266,sy:128, rverb:'lookat',
+        lookat:()=>sayP("A charity fun run, a missing cat poster, and a stern memo about kettle usage. Riveting."),
+        pickup:()=>sayP("I'm not taking the missing cat poster. Sergeant Willis is still hopeful."),
+        pull:()=>sayP("If I pull one pin, the whole administrative house of cards comes down."),
+      },
+      { id:'rope', label:'rope', x:288,y:44,w:26,h:36, sx:298,sy:130, rverb:'pickup',
+        lookat:()=>hasItem('rope')||G.flags.ropeOnPony
+          ? sayP("Just an empty coat hook now.")
+          : sayP("A sturdy coil of rope on the coat rack. Excellent for rounding things up. Things with hooves, say."),
+        pickup:()=>{
+          if(hasItem('rope')||G.flags.ropeOnPony) return sayP("I already took it.");
+          addItem('rope','rope','A sturdy rope. Standard issue for non-standard mornings.');
+          sayP("I have a feeling this is going to be a rope sort of a day.");
+        },
+        pull:()=>sayP("It's not attached to anything except the hook. And my destiny."),
+        use:()=>sayP("Maybe I should just pick it up like a normal officer."),
+      },
+      { id:'cabinet', label:'filing cabinet', x:176,y:56,w:30,h:40, sx:190,sy:128, rverb:'open',
+        lookat:()=>sayP("Decades of Thames Valley paperwork. None of it about ponies. Yet."),
+        open:()=>sayP("I open the drawer. Forms. Forms about forms. I close the drawer."),
+        use:()=>sayP("No time for filing. There's a pony at large."),
+        pull:()=>sayP("The top drawer is alphabetised by regret."),
+      },
+      { id:'desk', label:'desk', x:8,y:96,w:114,h:30, sx:64,sy:130, rverb:'lookat',
+        lookat:()=>sayP("My desk. Phone, radio, coffee, paperwork. The four food groups of policing."),
+        push:()=>sayP("It's bolted down. Like everything else around here, including my career."),
+      },
+      { id:'door', label:'door', x:128,y:18,w:46,h:80, sx:151,sy:128, rverb:'open',
+        lookat:()=>sayP("The way out. My car's parked just outside."),
+        open:()=>tryLeave(), use:()=>tryLeave(), walkto:()=>tryLeave(),
+        close:()=>sayP("It IS closed. The station is very secure. Mostly."),
+        talkto:()=>sayP("I could talk to the door, or I could walk through it like a professional."),
+      },
+    ];
+    case 2: return [
+      { id:'pony', label:'Shetland pony',
+        x:G.pony.x-16, y:G.pony.y-22, w:32, h:26,
+        sx:Math.max(100,Math.min(300,G.pony.x-24)), sy:Math.max(100,Math.min(136,G.pony.y+12)),
+        rverb:'lookat',
+        lookat:()=>{
+          const s=G.pony.state;
+          if(s==='roped') return sayP("Roped, but still doing a small indignant dance. I should try talking him down.");
+          if(s==='calm')  return sayP("Calm at last. Time to walk him back to that gap in the fence.");
+          if(s==='eating')return sayP("He's hoovering up that apple like it's the last one in Surrey. Now's my chance with the rope!");
+          return sayP("A Shetland pony, trotting north up the southbound carriageway. He seems excited rather than distressed. I may use that line later.");
+        },
+        talkto:()=>{
+          const s=G.pony.state;
+          if(s==='roped') return calmPony();
+          if(s==='calm')  return sayP("\"Good lad. Let's get you home.\"", ()=>say('pony',"Snrrt."));
+          if(s==='eating')return sayP("\"Enjoying that?\" He does not dignify it with a response.");
+          sayP("\"Here, boy! Come on!\"", ()=>say('pony',"NEIGH.", ()=>sayP("He gives me a look that says he has places to be. Wrong-way places.")));
+        },
+        pickup:()=>sayP("He's small, but he's not THAT small."),
+        push:()=>sayP("I'm not going to tip over a pony. This isn't that kind of police work."),
+        pull:()=>sayP("Pulling a pony by hand is how officers end up in junction 16. Via the air."),
+        open:()=>sayP("He's not a horsebox."),
+        use:()=>{
+          const s=G.pony.state;
+          if(s==='roped') return calmPony();
+          if(s==='eating')return sayP("Hands alone won't hold him. The rope, though...");
+          sayP("He's far too quick to grab. I need to lure him with something he actually wants.");
+        },
+        items:{
+          apple:(verb)=>giveApple(),
+          rope:(verb)=>{
+            if(verb==='give') return sayP("He doesn't want to HOLD the rope. Can't blame him, frankly.");
+            useRopeOnPony();
+          },
+          auth:(verb)=>sayP("I show him the road closure authorization. He remains unmoved by bureaucracy. Honestly? Respect."),
+        },
+      },
+      { id:'gap', label:'gap in the fence', x:50,y:58,w:32,h:26, sx:96,sy:104, rverb:'walkto',
+        lookat:()=>sayP("A pony-sized gap in the fence. The great escape started here. It can end here too."),
+        walkto:()=>tryReturnPony(), use:()=>tryReturnPony(), open:()=>sayP("It's already extremely open. That's rather the problem."),
+        close:()=>sayP("First the pony goes back through. THEN someone fixes the fence. Order of operations."),
+      },
+      { id:'field', label:'field of ponies', x:0,y:56,w:50,h:34, sx:96,sy:106, rverb:'lookat',
+        lookat:()=>sayP("The rest of the herd, watching from the field. Not one of them paid for a ticket to this."),
+        talkto:()=>say('pony',"*distant judgemental whinnying*",()=>sayP("His mates are loving this.")),
+      },
+      { id:'road', label:'carriageway', x:90,y:56,w:210,h:88, sx:0,sy:0, rverb:'lookat',
+        lookat:()=>sayP("Three lanes of the M25, eerily empty. Usually it's nose-to-tail misery by now. The pony has achieved what decades of transport policy could not."),
+        items:{
+          apple:(verb)=>giveApple(),
+          rope:(verb)=>sayP("I can't lasso the tarmac. The pony, on the other hand..."),
+        },
+      },
+      { id:'car2a', label:'police car', x:94,y:108,w:42,h:24, sx:120,sy:130, rverb:'lookat',
+        lookat:()=>sayP("A Thames Valley patrol car, lights going. Very reassuring. Very blue."),
+        talkto:()=>say('cop',"All yours, Paul. We'll handle the cones.",()=>sayP("The cones do seem handled.")),
+        open:()=>sayP("Better not. The handbrake's iffy and we're on a motorway."),
+        use:()=>sayP("I'm not driving anywhere until that pony is back in his field."),
+      },
+      { id:'signs', label:'closure signs', x:96,y:62,w:44,h:32, sx:128,sy:106, rverb:'lookat',
+        lookat:()=>sayP("M25 SHUT. Two words I never thought I'd be grateful for."),
+        push:()=>sayP("The signs are doing their one job. I'll let them."),
+        pickup:()=>sayP("Tampering with traffic management? In THIS economy?"),
+      },
+      { id:'cones', label:'traffic cones', x:108,y:88,w:52,h:16, sx:134,sy:110, rverb:'lookat',
+        lookat:()=>sayP("Traffic cones. The natural predator of the British motorist."),
+        pickup:()=>sayP("Every officer wants to take one home. None of us do. It's the code."),
+        talkto:()=>sayP("\"Good work, lads.\" The cones say nothing. Solid, dependable."),
+      },
+      { id:'barrier', label:'crash barrier', x:300,y:56,w:20,h:88, sx:290,sy:118, rverb:'lookat',
+        lookat:()=>sayP("The central reservation barrier. Beyond it, the northbound traffic is slowing down to enjoy the show."),
+      },
+    ];
+    case 3: return [
+      { id:'journ', label:'Horse & Hound journalist', x:198,y:88,w:24,h:38, sx:188,sy:126, rverb:'talkto',
+        lookat:()=>sayP("A journalist from Horse & Hound magazine. Notepad ready, eyes keen. The equestrian press waits for no one."),
+        talkto:()=>{
+          if(G.flags.pressDone) return say('journ',"Thanks again, Mr Anthem. This is going to be a great story!");
+          startInterview();
+        },
+        use:()=>sayP("One does not simply 'use' the press. It's usually the other way round."),
+        push:()=>sayP("Assaulting a journalist, live at the scene? Bold career move. No."),
+        items:{
+          auth:(verb)=>say('journ',"A road closure authorization. How... bureaucratically thrilling.",()=>sayP("She hands it straight back.")),
+          rope:(verb)=>sayP("It's police property. Also it has pony slobber on it."),
+          apple:(verb)=>sayP("I appear to be out of apples. Long story. Well — 47 minutes long."),
+        },
+      },
+      { id:'pcar1', label:'police car', x:14,y:68,w:42,h:28, sx:46,sy:112, rverb:'lookat',
+        lookat:()=>sayP("The blue lights are still going. Force of habit."),
+        talkto:()=>say('cop',"Carriageway reopens at 07:37, Paul.",()=>sayP("\"Copy that. Tell the cones to stand down.\"")),
+      },
+      { id:'pcar2', label:'police car', x:62,y:72,w:42,h:28, sx:90,sy:114, rverb:'lookat',
+        lookat:()=>sayP("Quite the turnout for one small pony. He'd be flattered."),
+        open:()=>sayP("My press conference is THIS way. Focus, Anthem."),
+      },
+      { id:'m25', label:'M25', x:0,y:40,w:W,h:26, sx:160,sy:104, rverb:'lookat',
+        lookat:()=>sayP("Traffic flowing again. Thousands of commuters who will never know what happened here. Except the ones who read Horse & Hound."),
+        talkto:()=>sayP("\"Back to normal, you lot. Nothing to see here.\" Apart from the pony-shaped dent in my morning."),
+      },
+    ];
+  }
+  return [];
+}
+
+// ============================================================
+//  SCENE 1 SCRIPT
+// ============================================================
+function answerPhone() {
+  if(G.flags.phoneAnswered) return sayP("I've already taken the call. One pony per phone call, that's the rule.");
+  G.flags.phoneAnswered=true; G.flags.phoneRinging=false;
+  G.player.action='phone';
+  say('phone',"Dispatch to Anthem. We've got a report of a Shetland pony loose on the M25 southbound, between junctions 15 and 16.");
+  say('phone',"It's heading NORTH. Against traffic. We need that carriageway closed immediately.");
+  say('paul',"...A Shetland pony. On the M25. At half past six in the morning.", ()=>{
+    G.player.action=null;
+    sayP("Right. Better get this sorted before rush hour turns it into a western.");
+  });
+}
+function useRadio() {
+  if(!G.flags.phoneAnswered) return sayP("I should probably answer that phone first. It sounds urgent. Phones always do.");
+  if(G.flags.closureAuth) return sayP("The closure's already authorized. Once is policy, twice is showing off.");
+  G.flags.closureAuth=true;
+  addItem('auth','authorization','Road closure authorization, M25 J15-J16. Laminated? No. Powerful? Immensely.');
+  say('paul',"All units, this is Paul Anthem, Thames Valley Police. Authorize immediate closure of the M25 southbound, junctions 15 to 16. We have a loose animal on the carriageway.");
+  say('radio',"Copy that, Paul. Units en route. Carriageway closed at 06:50.", ()=>{
+    sayP("06:50. The M25, shut by a pony. There's a sentence I never trained for.");
+  });
+}
+function tryLeave() {
+  if(!G.flags.phoneAnswered) return sayP("The phone is ringing itself off the desk. I should answer it before I go anywhere.");
+  if(!G.flags.closureAuth)  return sayP("I can't have a pony playing chicken with live traffic. I need to radio in the road closure first.");
+  if(!hasItem('rope'))      return sayP("Catch a pony with my bare hands and good intentions? No. There's a perfectly good rope on that coat rack.");
+  if(!hasItem('apple'))     return sayP("Hmm. I'll need to get the pony to come to ME somehow. Something a pony would want... like that apple on my desk.");
+  sayP("Phone answered, road shut, rope, apple. That's the full pony-retrieval loadout. Let's go.", ()=>{
+    say('narr',"06:55 AM — The M25, between junctions 15 and 16.", ()=>changeScene(2));
+  });
+}
+
+// ============================================================
+//  SCENE 2 SCRIPT
+// ============================================================
+function giveApple() {
+  if(!hasItem('apple')) return sayP("I'm fresh out of apples.");
+  if(G.pony.state!=='trot') return sayP("The apple's already done its job.");
+  removeItem('apple'); G.flags.appleGone=true;
+  const ax=Math.max(110,Math.min(290,G.player.x+20)), ay=Math.max(98,Math.min(120,G.player.y-6));
+  G.flags.applePlaced=true; G.flags.appleX=ax; G.flags.appleY=ay;
+  sayP("Here you go, boy. Fresh from the Thames Valley Police fruit bowl.", ()=>{
+    say('pony',"*interested snort*", ()=>{
+      G.pony.state='approach';
+      G.pony.tx=ax+8; G.pony.ty=ay+2;
+      sayP("His ears have gone up. He can smell it. Come on... come on...");
+    });
+  });
+}
+function useRopeOnPony() {
+  const s=G.pony.state;
+  if(s==='eating') {
+    removeItem('rope'); G.flags.ropeOnPony=true;
+    G.pony.state='roped';
+    sayP("Steady... steady...", ()=>{
+      say('pony',"NEIGH!!", ()=>{
+        sayP("Got him! He's tugging like a kite in a gale, but the rope holds.", ()=>{
+          sayP("Now to calm him down before I lead him anywhere.");
+        });
+      });
+    });
+  } else if(s==='trot') {
+    sayP("He's far too quick. I need him distracted first. Standing still. Eating, ideally.");
+  } else if(s==='approach') {
+    sayP("Almost... let him settle into the apple first.");
+  } else if(s==='roped') {
+    sayP("He's already roped. Now he needs a bit of community policing. The talking kind.");
+  } else {
+    sayP("The rope has done its work.");
+  }
+}
+function calmPony() {
+  G.pony.state='calm'; G.player.action='calm';
+  sayP("Easy there, boy. Easy. Nobody's in trouble. Well — you are, slightly.", ()=>{
+    say('pony',"...snrrt.", ()=>{
+      G.player.action=null;
+      sayP("He's nuzzling my hand. We're friends now. The press shall hear of this.", ()=>{
+        sayP("Right. Back through the fence gap with you.");
+      });
+    });
+  });
+}
+function tryReturnPony() {
+  if(G.pony.state==='calm') {
+    sayP("This way, lad. Mind the cones.", ()=>{
+      G.pony.state='gone'; G.flags.ponyHome=true;
+      say('pony',"*triumphant returning whinny*");
+      say('narr',"07:15 AM — One Shetland pony, safely returned to his field.");
+      say('paul',"And the herd pretends nothing happened. Typical.", ()=>{
+        sayP("Hang on. Green jacket, notepad, purposeful walk... that's the press. Best look professional.", ()=>{
+          say('narr',"07:20 AM — The hard shoulder. The press has arrived.", ()=>changeScene(3));
+        });
+      });
+    });
+  } else if(G.pony.state==='roped') {
+    sayP("He's still doing the indignant dance. I should talk him down first.");
+  } else {
+    sayP("Step one: actually catch the pony. THEN the triumphant homecoming.");
+  }
+}
+
+// ============================================================
+//  SCENE 3 SCRIPT — the interview
+// ============================================================
+function startInterview() {
+  say('journ',"Mr Anthem? Sarah Collins, Horse & Hound. I hear you've had quite the morning. A few questions for our readers?");
+  say('paul',"Of course. Thames Valley Police are always happy to assist the equestrian press.", ()=>askQ1());
+}
+function askQ1() {
+  say('journ',"So — what exactly happened here this morning?", ()=>{
+    showChoices([
+      {label:"We received a report, closed the carriageway, recovered the animal safely.", val:'pro'},
+      {label:"We had a bit of an unexpected commuter this morning.", val:'fun'},
+      {label:"It was 6:30 AM. One pony. Three lanes. The stakes were enormous.", val:'drama'},
+    ], c=>{
+      G.journChoices.push(c.val);
+      const full={
+        pro:"At approximately 06:30 we received a report of a Shetland pony loose on the M25 southbound between junctions 15 and 16. We closed the carriageway and safely returned the animal to its enclosure.",
+        fun:"Well, we had a bit of an unexpected commuter this morning. A Shetland pony decided to try the M25 — heading north up the southbound carriageway, no less. Clearly doesn't read road signs.",
+        drama:"It was 6:30 AM. The call came in. A lone Shetland pony, facing down three lanes of Britain's busiest motorway. One wrong move and... well. Let's just say the stakes were high.",
+      };
+      say('paul', full[c.val], ()=>askQ2());
+    });
+  });
+}
+function askQ2() {
+  say('journ',"Was the pony in any danger?", ()=>{
+    showChoices([
+      {label:"Never in serious danger. He seemed excited rather than distressed.", val:'pro'},
+      {label:"Danger? He was having the time of his life!", val:'fun'},
+      {label:"Every second counted. The margin for error was razor thin.", val:'drama'},
+    ], c=>{
+      G.journChoices.push(c.val);
+      const full={
+        pro:"The pony was never in serious danger. We closed the road quickly and our officers handled the situation with care. He seemed excited rather than distressed, and we were able to calm him down.",
+        fun:"Danger? He was having the time of his life! Honestly, he seemed more excited than any of us. Like a tourist who'd wandered onto entirely the wrong motorway.",
+        drama:"Every second counted. A Shetland pony versus seventy-mile-an-hour traffic — the margin for error was razor thin. But Thames Valley Police don't back down, no matter how many hooves are involved.",
+      };
+      say('paul', full[c.val], ()=>{
+        if(c.val==='pro') say('journ',"'Excited rather than distressed' — oh, that's GOING in the piece.");
+        askQ3();
+      });
+    });
+  });
+}
+function askQ3() {
+  say('journ',"And how did you actually catch him?", ()=>{
+    showChoices([
+      {label:"An apple to lure him, a rope to secure him, calm words to settle him.", val:'pro'},
+      {label:"Let's just say I owe my lunch apple a debt of gratitude.", val:'fun'},
+      {label:"A tense standoff. Man versus pony. I had one ace up my sleeve.", val:'drama'},
+    ], c=>{
+      G.journChoices.push(c.val);
+      const full={
+        pro:"We used an apple to lure the pony within reach, then secured him with a rope. Once calm, he was led back through a gap in the fence to his field of origin.",
+        fun:"Let's just say I owe my lunch apple a debt of gratitude. The pony and I struck a deal — one apple for a peaceful surrender. The rope was a formality at that point.",
+        drama:"It was a tense standoff. Man versus pony. But I had one ace up my sleeve — a fresh apple. The moment he went for it, I made my move. One throw of the rope and it was over. Justice was served.",
+      };
+      G.flags.pressDone=true;
+      say('paul', full[c.val]);
+      say('journ',"Brilliant. Thank you, Mr Anthem — our readers will love this!");
+      say('narr',"07:37 AM — The M25 southbound reopens. Total closure: 47 minutes.");
+      say('paul',"Another day in Thames Valley. The commuters will never know what I did for them.", ()=>{
+        say('paul',"...or for one very adventurous Shetland pony.", ()=>{ G.screen='end'; });
+      });
+    });
+  });
+}
+
+// ============================================================
+//  SCENES / MOVEMENT
+// ============================================================
+const WALKBOX = {
+  1:{minX:16, maxX:306, minY:126, maxY:140},
+  2:{minX:96, maxX:308, minY:100, maxY:138},
+  3:{minX:12, maxX:308, minY:100, maxY:138},
+};
+function changeScene(n){ G.transition=60; G.nextScene=n; }
+function initScene(n) {
+  G.scene=n; G.hoverHot=null; G.dialog=null; resetCur();
+  G.sayQ.length=0; G.sayCur=null;
+  const p=G.player;
+  p.walking=false; p.action=null; p.visible=true;
+  if(n===1){ p.x=160;p.y=134; G.flags.phoneRinging=!G.flags.phoneAnswered; }
+  if(n===2){ p.x=104;p.y=124; G.pony.x=210;G.pony.y=92;G.pony.tx=210;G.pony.ty=92;G.pony.state='trot';G.pony.timer=0; }
+  if(n===3){ p.x=130;p.y=128; }
+  p.tx=p.x; p.ty=p.y;
+  renderBG(n);
+}
+function walkTo(x,y,cb) {
+  const b=WALKBOX[G.scene];
+  G.player.tx=Math.max(b.minX,Math.min(b.maxX,x));
+  G.player.ty=Math.max(b.minY,Math.min(b.maxY,y));
+  G.player.walking=true; G.walkCB=cb||null;
+}
+function updatePlayer() {
+  const p=G.player;
+  if(!p.walking) return;
+  const dx=p.tx-p.x, dy=p.ty-p.y;
+  const d=Math.sqrt(dx*dx+dy*dy);
+  if(d<2) {
+    p.walking=false; p.frame=0;
+    if(G.walkCB){ const cb=G.walkCB; G.walkCB=null; cb(); }
+    return;
+  }
+  p.x+=dx/d*WALK_SPEED;
+  p.y+=dy/d*WALK_SPEED;
+  p.frame+=0.14;
+}
+
+// ===== PONY AI =====
+const PONY_WP=[{x:150,y:86},{x:230,y:94},{x:190,y:80},{x:265,y:90},{x:140,y:100},{x:250,y:104}];
+function updatePony() {
+  if(G.scene!==2 || G.pony.state==='gone') return;
+  const p=G.pony;
+  p.frame+=0.1;
+  if(p.state==='trot') {
+    const dx=p.tx-p.x, dy=p.ty-p.y, d=Math.sqrt(dx*dx+dy*dy);
+    if(d<3) {
+      if(++p.timer>80) {
+        const wp=PONY_WP[Math.floor(Math.random()*PONY_WP.length)];
+        p.tx=wp.x; p.ty=wp.y; p.timer=0;
+      }
+    } else { p.x+=dx/d*0.45; p.y+=dy/d*0.45; }
+  } else if(p.state==='approach') {
+    const dx=p.tx-p.x, dy=p.ty-p.y, d=Math.sqrt(dx*dx+dy*dy);
+    if(d<4) { p.state='eating'; G.flags.appleEaten2=true; }
+    else { p.x+=dx/d*0.35; p.y+=dy/d*0.35; }
+  } else if(p.state==='roped'||p.state==='calm') {
+    const dx=G.player.x+20-p.x, dy=G.player.y-16-p.y, d=Math.sqrt(dx*dx+dy*dy);
+    if(d>30) { p.x+=dx/d*0.65; p.y+=dy/d*0.65; }
+  }
+}
+
+// ============================================================
+//  VERB / SENTENCE ENGINE
+// ============================================================
+function buildSentence() {
+  let s = cur.verb ? VLABEL[cur.verb] : 'Walk to';
+  if(cur.item) s += ' ' + cur.item.name + (cur.verb==='give' ? ' to' : ' with');
+  if(G.hoverHot) s += ' ' + G.hoverHot.label;
+  else if(G.hoverInv>=0 && G.inventory[G.hoverInv] && !(cur.item && cur.item.id===G.inventory[G.hoverInv].id))
+    s += ' ' + G.inventory[G.hoverInv].name;
+  return s;
+}
+function execVerb(h, verb, item) {
+  const run = ()=>{
+    if(item) {
+      const f = h.items && h.items[item.id];
+      if(f) f(verb);
+      else sayP(verb==='give' ? "I don't think it wants that." : "That doesn't seem to work.");
+    } else {
+      const f = h[verb];
+      if(typeof f==='function') f();
+      else sayP(DEFAULTS[verb]);
+    }
+  };
+  resetCur();
+  if(verb==='lookat' && !item) run();
+  else walkTo(h.sx||h.x+h.w/2, h.sy||G.player.y, run);
+}
+function clickInventoryItem(item) {
+  const v = cur.verb;
+  if(!v || v==='lookat') { resetCur(); return sayP(item.desc); }
+  if(v==='use' || v==='give') { cur.item=item; return; }   // await target
+  if(v==='pickup') { resetCur(); return sayP("I've already got it."); }
+  if(v==='talkto') { resetCur(); return sayP("Me and the "+item.name+" have an understanding. No words needed."); }
+  if(v==='open' && item.id==='rope') { resetCur(); return sayP("It's a coil, not a knot."); }
+  resetCur();
+  sayP(DEFAULTS[v]);
+}
+
+// ============================================================
+//  INPUT
+// ============================================================
+function sceneHotAt(x,y) {
+  if(y>=SCENE_H) return null;
+  const hs=getHotspots();
+  for(const h of hs) if(x>=h.x&&x<h.x+h.w&&y>=h.y&&y<h.y+h.h) return h;
+  return null;
+}
+function invSlotAt(x,y) {
+  for(let i=0;i<6;i++) {
+    const col=i%2, row=(i/2)|0;
+    const sx=172+col*74, sy=UI_Y+2+row*14;
+    if(x>=sx&&x<sx+72&&y>=sy&&y<sy+13) return i;
+  }
+  return -1;
+}
+function verbCellAt(x,y) {
+  for(let i=0;i<9;i++) {
+    const col=i%3, row=(i/3)|0;
+    const vx=4+col*54, vy=UI_Y+2+row*14;
+    if(x>=vx&&x<vx+52&&y>=vy&&y<vy+13) return i;
+  }
+  return -1;
+}
+
+function handleInput() {
+  if(G.screen==='title') { if(clicked){ G.screen='game'; initScene(1); } clicked=false; rclicked=false; return; }
+  if(G.screen==='end')   { if(clicked){ G.screen='title'; resetGame(); } clicked=false; rclicked=false; return; }
+
+  if(G.transition>0) { clicked=false; rclicked=false; return; }
+
+  // speech active: any click skips line
+  if(sayBusy()) {
+    if(clicked||rclicked) advanceSay();
+    clicked=false; rclicked=false;
+    return;
+  }
+
+  // dialogue choices active
+  if(G.dialog) {
+    if(clicked && G.dialog.hover>=0) {
+      const d=G.dialog, c=d.choices[d.hover];
+      G.dialog=null;
+      d.cb(c);
+    }
+    clicked=false; rclicked=false;
+    return;
+  }
+
+  if(rclicked) {
+    rclicked=false;
+    if(cur.verb||cur.item) { resetCur(); }
+    else {
+      const h=sceneHotAt(mx,my);
+      if(h) execVerb(h, h.rverb||'lookat', null);
+    }
+  }
+
+  if(!clicked) return;
+  clicked=false;
+
+  // UI panel
+  if(my>=SCENE_H) {
+    const vi=verbCellAt(mx,my);
+    if(vi>=0) { cur.verb=VERBS[vi].id; cur.item=null; return; }
+    const si=invSlotAt(mx,my);
+    if(si>=0 && G.inventory[si]) clickInventoryItem(G.inventory[si]);
+    return;
+  }
+
+  // scene click
+  const h=sceneHotAt(mx,my);
+  if(cur.item) {                       // "Use X with ___" / "Give X to ___"
+    if(h) execVerb(h, cur.verb, cur.item);
+    else resetCur();
+    return;
+  }
+  if(cur.verb) {
+    if(h) execVerb(h, cur.verb, null);
+    else { resetCur(); walkTo(mx,my); }
+    return;
+  }
+  // no verb: walk (hotspots may intercept walk)
+  if(h && h.walkto) { execVerb(h,'walkto',null); }
+  else if(h) walkTo(h.sx||mx, h.sy||my);
+  else walkTo(mx,my);
+}
+
+function updateHover() {
+  G.hoverHot=null; G.hoverVerb=-1; G.hoverInv=-1;
+  if(G.screen!=='game' || sayBusy() || G.transition>0) return;
+  if(G.dialog) {
+    G.dialog.hover=-1;
+    for(let i=0;i<G.dialog.choices.length;i++) {
+      const cy=UI_Y+4+i*13;
+      if(mx>=6&&mx<W-6&&my>=cy-2&&my<cy+11) G.dialog.hover=i;
+    }
+    return;
+  }
+  if(my<SCENE_H) { G.hoverHot=sceneHotAt(mx,my); return; }
+  G.hoverVerb=verbCellAt(mx,my);
+  const si=invSlotAt(mx,my);
+  if(si>=0 && G.inventory[si]) G.hoverInv=si;
+}
+
+function resetGame() {
+  G.scene=1; G.inventory.length=0; G.flags={}; G.journChoices.length=0;
+  G.sayQ.length=0; G.sayCur=null; G.dialog=null; resetCur();
+  G.pony.state='trot';
+}
+
+// ============================================================
+//  UI RENDERING
+// ============================================================
+function drawPanel() {
+  R(0,SCENE_H,W,H-SCENE_H,'#000');
+  R(0,SCENE_H,W,1,'#202028');
+
+  // sentence line
+  cx_.font='bold 8px monospace';
+  cx_.textAlign='center';
+  cx_.fillStyle = (cur.verb||cur.item) ? '#e8e8a0' : '#9898e8';
+  cx_.fillText(buildSentence(), W/2, SENT_Y+7);
+  cx_.textAlign='left';
+
+  if(G.dialog) { drawDialogPanel(); return; }
+
+  // verb grid
+  for(let i=0;i<9;i++) {
+    const col=i%3, row=(i/3)|0;
+    const vx=4+col*54, vy=UI_Y+2+row*14;
+    const sel = cur.verb===VERBS[i].id;
+    const hov = G.hoverVerb===i;
+    cx_.font='bold 8px monospace';
+    cx_.fillStyle = sel ? '#ffff66' : hov ? '#8fff8f' : '#3fbf3f';
+    cx_.fillText(VERBS[i].label, vx+4, vy+10);
+  }
+  // divider
+  R(166,UI_Y+2,1,40,'#202028');
+  // inventory
+  for(let i=0;i<6;i++) {
+    const col=i%2, row=(i/2)|0;
+    const sx=172+col*74, sy=UI_Y+2+row*14;
+    const it=G.inventory[i];
+    if(!it) continue;
+    const hov = G.hoverInv===i;
+    const sel = cur.item && cur.item.id===it.id;
+    drawItemIcon(it.id, sx, sy+1);
+    cx_.font='bold 8px monospace';
+    cx_.fillStyle = sel ? '#ffff66' : hov ? '#8fff8f' : '#3fbf3f';
+    cx_.fillText(it.name, sx+13, sy+10);
+  }
+}
+function drawDialogPanel() {
+  const d=G.dialog;
+  for(let i=0;i<d.choices.length;i++) {
+    const cy=UI_Y+4+i*13;
+    const hov=d.hover===i;
+    cx_.font='bold 8px monospace';
+    cx_.fillStyle = hov ? '#ffff88' : '#b8a8d8';
+    cx_.fillText((hov?'▸ ':'  ')+d.choices[i].label, 8, cy+8);
+  }
+}
+function drawCursor() {
+  // SCUMM crosshair
+  const c = G.hoverHot ? '#ffff88' : '#e8e8e8';
+  R(mx-1,my-5,3,3,'#000'); R(mx-1,my+3,3,3,'#000');
+  R(mx-5,my-1,3,3,'#000'); R(mx+3,my-1,3,3,'#000');
+  R(mx,my-4,1,2,c); R(mx,my+3,1,2,c);
+  R(mx-4,my,2,1,c); R(mx+3,my,2,1,c);
+}
+
+// ============================================================
+//  TITLE & END SCREENS
+// ============================================================
+function drawTitle() {
+  R(0,0,W,H,'#000010');
+  // starfield
+  for(let i=0;i<50;i++) {
+    const sx=(i*97+33)%W, sy=(i*53+17)%120+6;
+    const b=Math.sin(G.tick*0.05+i)*0.3+0.6;
+    cx_.fillStyle=`rgba(220,220,255,${b})`;
+    cx_.fillRect(sx,sy,1,1);
+  }
+  // road
+  DGRAD(0,150,W,50,['#3e3e44','#34343a']);
+  for(let lx=-((G.tick*0.8)%24);lx<W;lx+=24) R(lx,172,12,2,'#ddd');
+  // trotting pony silhouette
+  const px=160+Math.sin(G.tick*0.02)*60;
+  const pf=Math.floor(G.tick/8)%2?1:-1;
+  R(px-10,142,20,12,'#b8860b'); R(px-16,138,8,8,'#b8860b');
+  R(px-11,136,7,5,'#5a3a1a'); R(px+8,140,4,6,'#5a3a1a');
+  R(px-8+pf,154,3,6,'#8a6a0a'); R(px-2-pf,154,3,6,'#8a6a0a');
+  R(px+3+pf,154,3,6,'#8a6a0a'); R(px+7-pf,154,3,6,'#8a6a0a');
+  if(Math.floor(G.tick/10)%2) { R(40,156,8,3,'#5555ff'); R(270,160,8,3,'#5555ff'); }
+  // title, MI-style big serif
+  cx_.textAlign='center';
+  cx_.font='bold 26px serif'; cx_.fillStyle='#16101c';
+  cx_.fillText('PONY QUEST', W/2+2, 52);
+  cx_.fillStyle='#e8c840';
+  cx_.fillText('PONY QUEST', W/2, 50);
+  cx_.font='bold 13px serif'; cx_.fillStyle='#d09838';
+  cx_.fillText('The Secret of the M25™', W/2, 70);
+  cx_.font='bold 8px monospace'; cx_.fillStyle='#8888aa';
+  cx_.fillText('A Thames Valley Police Adventure', W/2, 92);
+  cx_.fillText('Based on true events — 10 October 2003', W/2, 104);
+  cx_.fillStyle='#666688';
+  cx_.fillText('© 2003 Anthem Bros. Entertainment', W/2, 118);
+  if(Math.floor(G.tick/30)%2) {
+    cx_.fillStyle='#ccccee';
+    cx_.fillText('Click to begin', W/2, 136);
+  }
+  cx_.textAlign='left';
+}
+
+function drawEndScreen() {
+  R(0,0,W,H,'#0a0a16');
+  let pro=0,fun=0,drama=0;
+  for(const t of G.journChoices){ if(t==='pro')pro++; if(t==='fun')fun++; if(t==='drama')drama++; }
+  let headline, subline;
+  if(pro>=2)       { headline="Thames Valley Police handle";        subline="pony escape with aplomb"; }
+  else if(fun>=2)  { headline="Shetland pony's M25 adventure";      subline="ends with apple-based diplomacy"; }
+  else if(drama>=2){ headline="Heroic police standoff with";        subline="rogue pony on Britain's busiest road"; }
+  else             { headline="Loose Shetland closes M25 —";   subline="pony safely returned after 47 minutes"; }
+
+  cx_.textAlign='center';
+  cx_.font='bold 18px serif'; cx_.fillStyle='#e8c840';
+  cx_.fillText('PONY QUEST', W/2, 32);
+  cx_.font='bold 10px serif'; cx_.fillStyle='#c0a030';
+  cx_.fillText('The Secret of the M25™', W/2, 46);
+  cx_.font='bold 8px monospace'; cx_.fillStyle='#8888aa';
+  cx_.fillText('CASE CLOSED', W/2, 62);
+
+  // the Horse & Hound front page
+  R(58,72,204,92,'#f5f0e0');
+  R(58,72,204,3,'#332a1a');
+  cx_.font='bold 12px serif'; cx_.fillStyle='#332a1a';
+  cx_.fillText('HORSE & HOUND', W/2, 88);
+  R(78,92,164,1,'#332a1a');
+  cx_.font='bold 8px monospace'; cx_.fillStyle='#222';
+  cx_.fillText(headline, W/2, 106);
+  cx_.fillText(subline, W/2, 118);
+  cx_.font='8px monospace'; cx_.fillStyle='#555';
+  cx_.fillText('By Sarah Collins — 10 October 2003', W/2, 134);
+  cx_.fillText('The M25 reopened at 7:37 AM after', W/2, 146);
+  cx_.fillText('a 47-minute closure.', W/2, 156);
+
+  if(Math.floor(G.tick/30)%2) {
+    cx_.font='bold 8px monospace'; cx_.fillStyle='#ccccee';
+    cx_.fillText('Click to play again', W/2, 186);
+  }
+  cx_.textAlign='left';
+}
+
+// ============================================================
+//  MAIN
+// ============================================================
+function drawGame() {
+  // prerendered background
+  cx_.drawImage(bg,0,0);
+  // dynamic background bits
+  if(G.scene===1) drawStationDyn();
+  else if(G.scene===2) drawMotorwayDyn();
+  else drawPressDyn();
+
+  const talking = G.sayCur ? G.sayCur.actor : null;
+
+  // depth-sorted actors (by feet y)
+  const actors=[];
+  if(G.scene===2 && G.pony.state!=='gone')
+    actors.push({y:G.pony.y, draw:()=>drawPonySprite(G.pony.x,G.pony.y,G.pony.frame,G.pony.state)});
+  if(G.scene===3)
+    actors.push({y:124, draw:()=>drawJournalist(210,124,talking==='journ')});
+  if(G.player.visible)
+    actors.push({y:G.player.y, draw:()=>drawPaul(G.player.x,G.player.y,G.player.frame,G.player.walking,G.player.action,talking==='paul')});
+  actors.sort((a,b)=>a.y-b.y);
+  for(const a of actors) a.draw();
+
+  drawPanel();
+  drawSay();
+
+  if(G.transition>0) {
+    const fa = G.transition>30 ? (60-G.transition)/30 : G.transition/30;
+    cx_.fillStyle=`rgba(0,0,0,${fa})`;
+    cx_.fillRect(0,0,W,H);
+  }
+  drawCursor();
+}
+
+function loop() {
+  G.tick++;
+  if(G.transition>0) {
+    G.transition--;
+    if(G.transition===30) initScene(G.nextScene);
+  }
+  if(G.screen==='game' && G.transition===0) {
+    updateSay();
+    if(!sayBusy() && !G.dialog) { updatePlayer(); updatePony(); }
+    else if(G.player.walking) updatePlayer();   // finish a walk that a cutscene started
+  }
+  updateHover();
+  handleInput();
+
+  cx_=fctx;
+  cx_.clearRect(0,0,W,H);
+  if(G.screen==='title') { drawTitle(); drawCursor(); }
+  else if(G.screen==='end') { drawEndScreen(); drawCursor(); }
+  else drawGame();
+
+  dctx.clearRect(0,0,display.width,display.height);
+  dctx.drawImage(buf,0,0,display.width,display.height);
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
