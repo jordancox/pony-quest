@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pony Quest 3D — Excited, Not Distressed</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;background:#0a0a14;overflow:hidden;font-family:ui-monospace,Menlo,Consolas,monospace}
+  #c{display:block;width:100%;height:100%}
+
+  /* ---- HUD overlay ---- */
+  #hud{position:fixed;inset:0;pointer-events:none;color:#fff}
+  #narration{
+    position:absolute;left:50%;top:18px;transform:translateX(-50%);
+    max-width:min(680px,90vw);display:flex;align-items:center;gap:12px;text-align:left;
+    background:rgba(8,10,24,.72);border:1px solid #2a3360;border-radius:10px;
+    padding:10px 16px 10px 10px;font-size:15px;line-height:1.35;
+    box-shadow:0 4px 24px rgba(0,0,0,.5);transition:opacity .3s;
+  }
+  #narration #avatar{
+    flex:0 0 auto;width:52px;height:52px;border-radius:50%;object-fit:cover;
+    border:2px solid #8fa0d8;background:#1a2140;
+  }
+  #narration.pop #avatar{animation:nod .45s ease}
+  @keyframes nod{0%{transform:scale(.8) rotate(-6deg)}60%{transform:scale(1.06) rotate(3deg)}100%{transform:none}}
+  #narration .who{font-size:10px;letter-spacing:.15em;color:#8fa0d8;text-transform:uppercase;display:block;margin-bottom:3px}
+  #meters{position:absolute;left:16px;bottom:16px;font-size:12px}
+  .meter{margin-top:6px;width:200px}
+  .meter .lbl{display:flex;justify-content:space-between;color:#aab2d8;margin-bottom:2px}
+  .bar{height:8px;background:rgba(255,255,255,.12);border-radius:4px;overflow:hidden}
+  .bar > i{display:block;height:100%;width:0;border-radius:4px;transition:width .15s}
+  #excite .bar > i{background:linear-gradient(90deg,#ffd34d,#ff7a3c)}
+  #tail   .bar > i{background:linear-gradient(90deg,#6fd3ff,#3c7aff)}
+  #clock{position:absolute;right:16px;top:16px;text-align:right}
+  #clock .t{font-size:30px;font-weight:700;letter-spacing:.04em}
+  #clock .sub{font-size:11px;color:#8fa0d8}
+  #help{position:absolute;left:16px;top:16px;font-size:11px;color:#8fa0d8;line-height:1.5}
+  #help b{color:#dfe4ff}
+  #title{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    background:radial-gradient(circle at 50% 40%,#10152e,#06070f);text-align:center;pointer-events:auto;cursor:pointer}
+  #title h1{font-size:34px;color:#e8c840;letter-spacing:.04em}
+  #title h2{font-size:16px;color:#c0a030;margin-top:4px;letter-spacing:.18em}
+  #title p{margin-top:18px;color:#8fa0d8;font-size:13px;max-width:440px;line-height:1.5}
+  #title .go{margin-top:26px;color:#aab2d8;font-size:14px;animation:blink 1.1s steps(2) infinite}
+  @keyframes blink{50%{opacity:.25}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud">
+  <div id="help"><b>WASD / Arrows</b> drive · <b>Shift</b> gallop<br>Go <b>north</b> (against traffic) to stay "excited"</div>
+  <div id="clock"><div class="t">06:50</div><div class="sub">M25 closed</div></div>
+  <div id="narration">
+    <img id="avatar" src="paul.jpg" alt="Paul Anthem">
+    <div><span class="who">Paul Anthem · Thames Valley Police</span><span id="ntext">…</span></div>
+  </div>
+  <div id="meters">
+    <div id="excite" class="meter"><div class="lbl"><span>Excitement</span><span class="v">0%</span></div><div class="bar"><i></i></div></div>
+    <div id="tail" class="meter"><div class="lbl"><span>Tailback</span><span class="v">0</span></div><div class="bar"><i></i></div></div>
+  </div>
+</div>
+
+<div id="title">
+  <h1>PONY QUEST 3D</h1>
+  <h2>EXCITED, NOT DISTRESSED</h2>
+  <p>M25, southbound, 06:50am, 10 October 2003. You are a Shetland pony.
+     You are heading <i>north</i>. This is, technically, the wrong way.</p>
+  <div class="go">▶ Click to escape the field</div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ======================= CONSTANTS =======================
+// Motorway runs along Z. Southbound traffic travels +Z. North = -Z = "wrong way".
+const ROAD_LEN   = 600;
+const LANE_W     = 4;
+const LANES      = [-6, -2, 2, 6];     // x-centres of the 4 southbound lanes
+const PONY_TURN  = 1.8;                 // rad/s
+const PONY_ACCEL = 22;
+const PONY_DRAG  = 2.4;
+const PONY_MAXV  = 26;
+
+// ======================= SCENE SETUP =======================
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9fb8d8);          // hazy dawn sky
+scene.fog = new THREE.Fog(0x9fb8d8, 120, 360);
+
+const camera = new THREE.PerspectiveCamera(58, 1, 0.1, 1000);
+
+const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x4a5240, 0.9);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff0d0, 1.1);
+sun.position.set(-40, 60, 30);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024,1024);
+sun.shadow.camera.left=-60; sun.shadow.camera.right=60;
+sun.shadow.camera.top=60; sun.shadow.camera.bottom=-60;
+scene.add(sun);
+
+// ======================= WORLD: motorway =======================
+const world = new THREE.Group();
+scene.add(world);
+
+// grass verge
+const grass = new THREE.Mesh(
+  new THREE.PlaneGeometry(400, ROAD_LEN),
+  new THREE.MeshLambertMaterial({ color:0x5d7a3a })
+);
+grass.rotation.x = -Math.PI/2; grass.position.y = -0.02; grass.receiveShadow = true;
+world.add(grass);
+
+// tarmac
+const road = new THREE.Mesh(
+  new THREE.PlaneGeometry(LANE_W*4 + 6, ROAD_LEN),
+  new THREE.MeshLambertMaterial({ color:0x33343a })
+);
+road.rotation.x = -Math.PI/2; road.receiveShadow = true;
+world.add(road);
+
+// hard shoulder line + lane dashes
+function paint(x, z, w, l, color=0xdddddd){
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w,l), new THREE.MeshBasicMaterial({color}));
+  m.rotation.x = -Math.PI/2; m.position.set(x, 0.01, z); world.add(m);
+}
+paint(-(LANE_W*2+3), 0, 0.3, ROAD_LEN);                 // left edge
+paint( (LANE_W*2+3), 0, 0.3, ROAD_LEN, 0xffd34d);       // right edge (yellow)
+for (let i=1;i<4;i++){
+  const x = -LANE_W*2 + i*LANE_W;
+  for (let z=-ROAD_LEN/2; z<ROAD_LEN/2; z+=12) paint(x, z+2, 0.25, 5);  // dashes
+}
+
+// gantry sign: "M25  J15 ▸ J16"
+function makeSign(text){
+  const cv = document.createElement('canvas'); cv.width=512; cv.height=128;
+  const g = cv.getContext('2d');
+  g.fillStyle='#0b3d0b'; g.fillRect(0,0,512,128);
+  g.strokeStyle='#fff'; g.lineWidth=6; g.strokeRect(8,8,496,112);
+  g.fillStyle='#fff'; g.font='bold 54px monospace'; g.textAlign='center'; g.textBaseline='middle';
+  g.fillText(text, 256, 64);
+  const tex = new THREE.CanvasTexture(cv);
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(20,5), new THREE.MeshBasicMaterial({map:tex}));
+  sign.position.set(0, 11, 0);
+  const post = (x)=>{ const p=new THREE.Mesh(new THREE.CylinderGeometry(0.4,0.4,13),new THREE.MeshLambertMaterial({color:0x888888})); p.position.set(x,6.5,0); return p; };
+  const beam = new THREE.Mesh(new THREE.BoxGeometry(24,0.6,0.6), new THREE.MeshLambertMaterial({color:0x888888})); beam.position.set(0,14,0);
+  const grp = new THREE.Group(); grp.add(sign, post(-11), post(11), beam); return grp;
+}
+const gantry = makeSign('M25  J15 ▸ J16'); gantry.position.z = -40; world.add(gantry);
+
+// ======================= PONY =======================
+function makePony(){
+  const g = new THREE.Group();
+  const brown = new THREE.MeshLambertMaterial({ color:0xb5793a });
+  const dark  = new THREE.MeshLambertMaterial({ color:0x4a2f14 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.2, 2.4), brown);
+  body.position.y = 1.4; body.castShadow = true; g.add(body);
+  const neck = new THREE.Mesh(new THREE.BoxGeometry(0.8,1.0,0.8), brown);
+  neck.position.set(0,2.0,1.1); neck.rotation.x=-0.5; g.add(neck);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.7,0.7,1.1), brown);
+  head.position.set(0,2.4,1.7); g.add(head);
+  const mane = new THREE.Mesh(new THREE.BoxGeometry(0.55,0.9,0.9), dark);
+  mane.position.set(0,2.5,1.0); g.add(mane);
+  // legs (animated)
+  const legs = [];
+  const legGeo = new THREE.BoxGeometry(0.32,1.0,0.32);
+  [[-0.5,1],[0.5,1],[-0.5,-0.9],[0.5,-0.9]].forEach(([x,z])=>{
+    const leg = new THREE.Mesh(legGeo, dark);
+    leg.position.set(x,0.5,z); leg.castShadow=true; g.add(leg); legs.push(leg);
+  });
+  g.userData.legs = legs;
+  return g;
+}
+const pony = makePony();
+pony.position.set(LANES[1], 0, ROAD_LEN/2 - 60);
+scene.add(pony);
+
+const ponyState = { heading: Math.PI, vel: 0 };  // facing -Z (north) at start
+
+// ======================= TRAFFIC =======================
+const cars = [];
+const carColors = [0xc0392b,0x2c3e50,0x27ae60,0xecf0f1,0x2980b9,0xf39c12,0x7f8c8d];
+function makeCar(){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.8,1.0,3.6),
+    new THREE.MeshLambertMaterial({ color: carColors[(Math.random()*carColors.length)|0] }));
+  body.position.y=0.7; body.castShadow=true; g.add(body);
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(1.6,0.7,1.8), new THREE.MeshLambertMaterial({color:0x222a33}));
+  cab.position.set(0,1.4,-0.2); g.add(cab);
+  g.userData = { lane:0, speed:0, stopped:false };
+  scene.add(g); return g;
+}
+for (let i=0;i<22;i++){
+  const c = makeCar();
+  c.userData.lane = (Math.random()*LANES.length)|0;
+  c.position.set(LANES[c.userData.lane], 0, -ROAD_LEN/2 + Math.random()*ROAD_LEN);
+  c.userData.speed = 22 + Math.random()*10;
+  cars.push(c);
+}
+
+// ======================= ONE COP =======================
+function makeCop(){
+  const g = new THREE.Group();
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.5,1.0,4,8), new THREE.MeshLambertMaterial({color:0x16365c}));
+  torso.position.y=1.3; torso.castShadow=true; g.add(torso);
+  const hat = new THREE.Mesh(new THREE.CylinderGeometry(0.42,0.5,0.7,12), new THREE.MeshLambertMaterial({color:0x111318}));
+  hat.position.y=2.3; g.add(hat);
+  const vest = new THREE.Mesh(new THREE.BoxGeometry(1.05,0.9,0.6), new THREE.MeshLambertMaterial({color:0xf7e733}));
+  vest.position.y=1.4; g.add(vest);
+  g.userData = { hat, lurch:0 };
+  scene.add(g); return g;
+}
+const cop = makeCop();
+cop.position.set(LANES[3], 0, ROAD_LEN/2 - 75);
+
+// ======================= NARRATION LADDER =======================
+const LINES = [
+  "We have a minor traffic management situation on the M25.",
+  "A small animal is being safely escorted from the carriageway.",
+  "The pony seems excited rather than distressed.",
+  "Officers are in complete control of the situation.",
+  "The pony is, ah — assisting officers with their enquiries.",
+  "At no point was anyone in any danger. Especially me.",
+  "Define 'closed'. The motorway is merely... resting.",
+];
+const ntext = document.getElementById('ntext');
+let narrLevel = -1;
+function setNarration(level){
+  level = Math.min(level, LINES.length-1);
+  if (level === narrLevel) return;
+  narrLevel = level;
+  const box = document.getElementById('narration');
+  box.style.opacity = 0;
+  setTimeout(()=>{
+    ntext.textContent = LINES[level];
+    box.style.opacity = 1;
+    box.classList.remove('pop'); void box.offsetWidth; box.classList.add('pop');  // retrigger nod
+  }, 200);
+}
+
+// ======================= INPUT =======================
+const keys = {};
+addEventListener('keydown', e=>{ keys[e.code]=true; });
+addEventListener('keyup',   e=>{ keys[e.code]=false; });
+
+let running = false;
+document.getElementById('title').addEventListener('click', ()=>{
+  document.getElementById('title').style.display='none';
+  running = true; setNarration(0);
+});
+
+// ======================= GAME STATE =======================
+let excitement = 0;     // 0..1
+let tailback = 0;       // count of stopped cars (smoothed)
+let elapsed = 0;        // seconds since closure (06:50)
+const exciteFill = document.querySelector('#excite .bar > i');
+const exciteVal  = document.querySelector('#excite .v');
+const tailFill   = document.querySelector('#tail .bar > i');
+const tailVal    = document.querySelector('#tail .v');
+const clockEl    = document.querySelector('#clock .t');
+
+// ======================= RESIZE =======================
+function resize(){
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w,h); camera.aspect = w/h; camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+
+// ======================= MAIN LOOP =======================
+const clock = new THREE.Clock();
+function tick(){
+  requestAnimationFrame(tick);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (running) update(dt);
+  renderer.render(scene, camera);
+}
+
+function update(dt){
+  // --- pony controls ---
+  const left  = keys.ArrowLeft || keys.KeyA;
+  const right = keys.ArrowRight|| keys.KeyD;
+  const fwd   = keys.ArrowUp   || keys.KeyW;
+  const back  = keys.ArrowDown || keys.KeyS;
+  const gallop= keys.ShiftLeft || keys.ShiftRight;
+
+  if (left)  ponyState.heading += PONY_TURN * dt;
+  if (right) ponyState.heading -= PONY_TURN * dt;
+  const maxv = PONY_MAXV * (gallop?1:0.6);
+  if (fwd)  ponyState.vel += PONY_ACCEL * dt;
+  if (back) ponyState.vel -= PONY_ACCEL * dt;
+  ponyState.vel -= ponyState.vel * PONY_DRAG * dt;
+  ponyState.vel = THREE.MathUtils.clamp(ponyState.vel, -8, maxv);
+
+  const dx = Math.sin(ponyState.heading) * ponyState.vel * dt;
+  const dz = Math.cos(ponyState.heading) * ponyState.vel * dt;
+  pony.position.x += dx; pony.position.z += dz;
+  pony.position.x = THREE.MathUtils.clamp(pony.position.x, -20, 20);
+  pony.position.z = THREE.MathUtils.clamp(pony.position.z, -ROAD_LEN/2+10, ROAD_LEN/2-10);
+  pony.rotation.y = ponyState.heading;
+
+  // trot leg animation
+  const gait = Math.abs(ponyState.vel) * 0.5;
+  pony.userData.legs.forEach((leg,i)=>{
+    leg.rotation.x = Math.sin(performance.now()*0.01*gait + (i%2?Math.PI:0)) * 0.4 * Math.min(1,Math.abs(ponyState.vel)/4);
+  });
+  // body bob
+  pony.children[0].position.y = 1.4 + Math.sin(performance.now()*0.02*gait)*0.06*Math.min(1,Math.abs(ponyState.vel)/4);
+
+  // --- "wrong way" detection: pony moving -Z while traffic goes +Z ---
+  const wrongWay = dz < -0.02;                 // heading north
+  const onRoad   = Math.abs(pony.position.x) < LANE_W*2+2;
+
+  // --- traffic ---
+  let stoppedNow = 0;
+  for (const c of cars){
+    // distance to pony along the road, same-ish lane
+    const ahead = c.position.z < pony.position.z;     // pony is south (ahead) of this car
+    const dzp = pony.position.z - c.position.z;
+    const dxp = Math.abs(pony.position.x - c.position.x);
+    const blocked = onRoad && dxp < LANE_W*0.9 && dzp > 0 && dzp < 22;
+    c.userData.stopped = blocked;
+    if (blocked){ stoppedNow++; }
+    else c.userData.speed = THREE.MathUtils.lerp(c.userData.speed, 22+Math.random()*8, 0.02);
+    const v = blocked ? 0 : c.userData.speed;
+    c.position.z += v * dt;
+    if (c.position.z > ROAD_LEN/2){            // recycle to top of the queue
+      c.position.z = -ROAD_LEN/2 - Math.random()*30;
+      c.position.x = LANES[(Math.random()*LANES.length)|0];
+      c.userData.speed = 22+Math.random()*10;
+    }
+  }
+  tailback = THREE.MathUtils.lerp(tailback, stoppedNow, 0.1);
+
+  // --- one cop chases pony (lurchy) ---
+  const toPony = new THREE.Vector3().subVectors(pony.position, cop.position);
+  const dist = toPony.length();
+  toPony.normalize();
+  cop.userData.lurch += dt*6;
+  const cspeed = 9 + Math.sin(cop.userData.lurch)*3;   // uneven jog
+  if (dist > 2.5){
+    cop.position.addScaledVector(toPony, cspeed*dt);
+    cop.rotation.y = Math.atan2(toPony.x, toPony.z);
+    cop.position.y = Math.abs(Math.sin(cop.userData.lurch))*0.25;   // bobbing run
+    cop.userData.hat.rotation.z = Math.sin(cop.userData.lurch*0.7)*0.2;
+  }
+
+  // --- meters ---
+  const exciteTarget = (wrongWay?0.6:0.1) + Math.min(0.4, stoppedNow*0.05) + Math.min(0.3, Math.abs(ponyState.vel)/PONY_MAXV*0.3);
+  excitement = THREE.MathUtils.lerp(excitement, Math.min(1,exciteTarget), 0.04);
+  exciteFill.style.width = (excitement*100).toFixed(0)+'%';
+  exciteVal.textContent = (excitement*100|0)+'%';
+  tailFill.style.width = Math.min(100, tailback*9)+'%';
+  tailVal.textContent = Math.round(tailback);
+
+  // narration escalates with a chaos score
+  const chaos = excitement*3 + tailback*0.4;
+  setNarration(Math.floor(chaos));
+
+  // --- closure clock (starts 06:50, real reopen 07:37) ---
+  elapsed += dt;
+  const total = 50*60 + elapsed; // minutes-of-day since 06:00 → 6*60+50 = 410
+  const mins = 410 + Math.floor(elapsed/2); // 2 real-seconds ≈ 1 in-game minute (tune later)
+  const hh = String(Math.floor(mins/60)).padStart(2,'0');
+  const mm = String(mins%60).padStart(2,'0');
+  clockEl.textContent = `${hh}:${mm}`;
+
+  // --- chase camera ---
+  const camBack = new THREE.Vector3(-Math.sin(ponyState.heading), 0, -Math.cos(ponyState.heading)).multiplyScalar(12);
+  const camTarget = pony.position.clone().add(camBack).add(new THREE.Vector3(0,7,0));
+  camera.position.lerp(camTarget, 0.08);
+  camera.lookAt(pony.position.x, 1.5, pony.position.z);
+  sun.position.set(pony.position.x-40, 60, pony.position.z+30);
+  sun.target = pony; scene.add(sun.target);
+}
+
+tick();
+</script>
+</body>
+</html>
