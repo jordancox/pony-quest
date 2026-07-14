@@ -2,15 +2,33 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
 <title>Pony Quest: The Secret of the M25</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#000;display:flex;justify-content:center;align-items:center;height:100vh;overflow:hidden}
-canvas{image-rendering:pixelated;image-rendering:crisp-edges;cursor:none}
+html,body{height:100%}
+body{background:#000;display:flex;justify-content:center;align-items:center;
+  height:100vh;height:100dvh;overflow:hidden;
+  touch-action:none;overscroll-behavior:none;
+  -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+canvas{image-rendering:pixelated;image-rendering:crisp-edges;cursor:none;touch-action:none}
+#fs{position:fixed;top:calc(6px + env(safe-area-inset-top));right:calc(6px + env(safe-area-inset-right));
+  z-index:9;background:rgba(0,0,0,0.55);color:#8fff8f;border:1px solid #3fbf3f;
+  font:16px monospace;line-height:1;padding:8px 10px;border-radius:4px;display:none;cursor:pointer}
+#rot{position:fixed;left:0;right:0;top:0;z-index:8;background:rgba(0,0,0,0.75);color:#e8e8a0;
+  font:12px monospace;text-align:center;padding:6px 4px calc(6px + env(safe-area-inset-top));
+  display:none;pointer-events:none}
+@media (orientation:portrait) and (pointer:coarse){ #rot{display:block} }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<button id="fs" title="Fullscreen">&#x26F6;</button>
+<div id="rot">Best played in landscape &#x1F504;</div>
 <script>
 'use strict';
 
@@ -39,11 +57,27 @@ const bgctx = bg.getContext('2d');
 let cx_ = fctx; // current draw target (swapped to bgctx for prerender)
 
 function resize() {
-  const s = Math.max(1, Math.floor(Math.min(window.innerWidth / W, window.innerHeight / H)));
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const dpr = window.devicePixelRatio || 1;
+  const f = Math.min(vw * dpr / W, vh * dpr / H);   // exact fit, in device px
+  const s = Math.max(1, Math.floor(f));             // integer render scale
   display.width = W * s; display.height = H * s;
+  if (dpr >= 2 || f < 1) {
+    // hi-dpi (phones): stretch to exact fit — off-by-a-hair pixels are
+    // invisible at this density, and filling the screen matters more
+    display.style.width  = Math.floor(W * f / dpr) + 'px';
+    display.style.height = Math.floor(H * f / dpr) + 'px';
+  } else {
+    // desktop: pure integer scaling, perfectly uniform pixels
+    display.style.width  = (W * s / dpr) + 'px';
+    display.style.height = (H * s / dpr) + 'px';
+  }
   dctx.imageSmoothingEnabled = false;
 }
 window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 100));
+if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
+document.addEventListener('fullscreenchange', resize);
 resize();
 
 // ===== DRAW HELPERS =====
@@ -200,13 +234,65 @@ const DEFAULTS = {
 
 // ===== INPUT =====
 let mx=0, my=0, clicked=false, rclicked=false;
-display.addEventListener('mousemove', e => {
+const TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+function toGame(cx, cy) {
   const r = display.getBoundingClientRect();
-  mx = Math.floor((e.clientX - r.left) / (display.width / W));
-  my = Math.floor((e.clientY - r.top) / (display.height / H));
-});
+  mx = Math.max(0, Math.min(W-1, Math.floor((cx - r.left) / (r.width / W))));
+  my = Math.max(0, Math.min(H-1, Math.floor((cy - r.top) / (r.height / H))));
+}
+display.addEventListener('mousemove', e => toGame(e.clientX, e.clientY));
 display.addEventListener('click', () => { clicked=true; });
 display.addEventListener('contextmenu', e => { e.preventDefault(); rclicked=true; });
+
+// --- touch: tap = click, double-tap or long-press = default action ---
+let lastTap={t:0,x:0,y:0}, touchCur=null, lpTimer=null;
+display.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const t=e.changedTouches[0];
+  toGame(t.clientX, t.clientY);
+  touchCur={x:mx, y:my, moved:false};
+  clearTimeout(lpTimer);
+  lpTimer=setTimeout(() => {
+    if(touchCur && !touchCur.moved) { rclicked=true; touchCur=null; }
+  }, 450);
+}, {passive:false});
+display.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const t=e.changedTouches[0];
+  toGame(t.clientX, t.clientY);
+  if(touchCur && (Math.abs(mx-touchCur.x)>4 || Math.abs(my-touchCur.y)>4)) touchCur.moved=true;
+}, {passive:false});
+display.addEventListener('touchend', e => {
+  e.preventDefault();
+  clearTimeout(lpTimer);
+  // first tap on the title screen doubles as the fullscreen gesture (Android)
+  if(G.screen==='title' && document.fullscreenEnabled && !document.fullscreenElement)
+    document.documentElement.requestFullscreen({navigationUI:'hide'}).catch(()=>{});
+  if(!touchCur) return;                     // long-press already fired
+  if(!touchCur.moved) {
+    const now=performance.now();
+    if(now-lastTap.t<350 && Math.abs(mx-lastTap.x)<24 && Math.abs(my-lastTap.y)<24) {
+      rclicked=true; lastTap.t=0;           // double-tap -> default verb
+    } else {
+      clicked=true; lastTap={t:now, x:mx, y:my};
+    }
+  }
+  touchCur=null;
+}, {passive:false});
+display.addEventListener('touchcancel', () => { clearTimeout(lpTimer); touchCur=null; });
+
+// --- fullscreen toggle button (hidden where unsupported, e.g. iOS Safari) ---
+const fsBtn=document.getElementById('fs');
+if(document.fullscreenEnabled) {
+  fsBtn.style.display='block';
+  const fsToggle=e => {
+    e.preventDefault(); e.stopPropagation();
+    if(document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen({navigationUI:'hide'}).catch(()=>{});
+  };
+  fsBtn.addEventListener('click', fsToggle);
+  fsBtn.addEventListener('touchend', fsToggle, {passive:false});
+}
 
 // ===== SPEECH (text above heads, LucasArts style) =====
 const VOICE = {
@@ -1602,7 +1688,9 @@ function drawTitle() {
   TXT('Based on true events - 10 October 2003', W/2, 96, '#8888aa', 'center');
   TXT('(c) 2003 Anthem Bros. Entertainment', W/2, 110, '#666688', 'center');
   if(Math.floor(G.tick/30)%2)
-    OTXT('Click to begin', W/2, 128, '#eeeeff', 'center');
+    OTXT(TOUCH?'Tap to begin':'Click to begin', W/2, 128, '#eeeeff', 'center');
+  if(TOUCH)
+    OTXT('Tap: act - Double-tap: look', W/2, 189, '#a8a8c8', 'center');
 }
 
 function drawEndScreen() {
@@ -1642,7 +1730,7 @@ function drawEndScreen() {
   TXT('Full story p.3', 136, 152, '#5a5242');
 
   if(Math.floor(G.tick/30)%2)
-    OTXT('Click to play again', W/2, 178, '#ccccee', 'center');
+    OTXT(TOUCH?'Tap to play again':'Click to play again', W/2, 178, '#ccccee', 'center');
 }
 
 // ============================================================
