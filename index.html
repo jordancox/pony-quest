@@ -16,9 +16,10 @@ body{background:#000;display:flex;justify-content:center;align-items:center;
   touch-action:none;overscroll-behavior:none;
   -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
 canvas{image-rendering:pixelated;image-rendering:crisp-edges;cursor:none;touch-action:none}
-#fs{position:fixed;top:calc(6px + env(safe-area-inset-top));right:calc(6px + env(safe-area-inset-right));
+#fs,#mu{position:fixed;top:calc(6px + env(safe-area-inset-top));right:calc(6px + env(safe-area-inset-right));
   z-index:9;background:rgba(0,0,0,0.55);color:#8fff8f;border:1px solid #3fbf3f;
   font:16px monospace;line-height:1;padding:8px 10px;border-radius:4px;display:none;cursor:pointer}
+#mu{display:block;right:auto;left:calc(6px + env(safe-area-inset-left))}
 #rot{position:fixed;left:0;right:0;top:0;z-index:8;background:rgba(0,0,0,0.75);color:#e8e8a0;
   font:12px monospace;text-align:center;padding:6px 4px calc(6px + env(safe-area-inset-top));
   display:none;pointer-events:none}
@@ -28,6 +29,7 @@ canvas{image-rendering:pixelated;image-rendering:crisp-edges;cursor:none;touch-a
 <body>
 <canvas id="c"></canvas>
 <button id="fs" title="Fullscreen">&#x26F6;</button>
+<button id="mu" title="Music">&#9835;</button>
 <div id="rot">Best played in landscape &#x1F504;</div>
 <script>
 'use strict';
@@ -206,31 +208,12 @@ const G = {
   nextScene: 0,
   tick: 0,
   journChoices: [],
-  hoverHot: null, hoverVerb: -1, hoverInv: -1, hoverChoice: -1,
+  hoverHot: null, hoverInv: -1,
 };
 
-// sentence-line state: selected verb + optional first (inventory) object
-const cur = { verb:null, item:null };
-function resetCur(){ cur.verb=null; cur.item=null; }
-
-// ===== VERBS (Monkey Island 9-verb grid) =====
-const VERBS = [
-  {id:'give',   label:'Give'},   {id:'pickup', label:'Pick up'}, {id:'use',  label:'Use'},
-  {id:'open',   label:'Open'},   {id:'lookat', label:'Look at'}, {id:'push', label:'Push'},
-  {id:'close',  label:'Close'},  {id:'talkto', label:'Talk to'}, {id:'pull', label:'Pull'},
-];
-const VLABEL = {}; for(const v of VERBS) VLABEL[v.id]=v.label;
-const DEFAULTS = {
-  give:   "I'd need to be holding something first.",
-  pickup: "That's staying exactly where it is.",
-  use:    "I can think of no policing application for that.",
-  open:   "It doesn't open. And I've had training in these matters.",
-  close:  "It's about as closed as it's ever going to be.",
-  push:   "I push. It declines.",
-  pull:   "Pulling achieves nothing. A theme is developing this morning.",
-  talkto: "I talk to enough inanimate objects at the Monday briefing.",
-  lookat: "It's exactly as interesting as it looks.",
-};
+// one-tap interface: an armed inventory item awaiting its target
+const cur = { item:null };
+function resetCur(){ cur.item=null; }
 
 // ===== INPUT =====
 let mx=0, my=0, clicked=false, rclicked=false;
@@ -241,45 +224,33 @@ function toGame(cx, cy) {
   my = Math.max(0, Math.min(H-1, Math.floor((cy - r.top) / (r.height / H))));
 }
 display.addEventListener('mousemove', e => toGame(e.clientX, e.clientY));
-display.addEventListener('click', () => { clicked=true; });
+display.addEventListener('click', () => { initAudio(); clicked=true; });
 display.addEventListener('contextmenu', e => { e.preventDefault(); rclicked=true; });
 
-// --- touch: tap = click, double-tap or long-press = default action ---
-let lastTap={t:0,x:0,y:0}, touchCur=null, lpTimer=null;
+// --- touch: a single tap does everything ---
+let touchCur=null;
 display.addEventListener('touchstart', e => {
   e.preventDefault();
+  initAudio();
   const t=e.changedTouches[0];
   toGame(t.clientX, t.clientY);
   touchCur={x:mx, y:my, moved:false};
-  clearTimeout(lpTimer);
-  lpTimer=setTimeout(() => {
-    if(touchCur && !touchCur.moved) { rclicked=true; touchCur=null; }
-  }, 450);
 }, {passive:false});
 display.addEventListener('touchmove', e => {
   e.preventDefault();
   const t=e.changedTouches[0];
   toGame(t.clientX, t.clientY);
-  if(touchCur && (Math.abs(mx-touchCur.x)>4 || Math.abs(my-touchCur.y)>4)) touchCur.moved=true;
+  if(touchCur && (Math.abs(mx-touchCur.x)>6 || Math.abs(my-touchCur.y)>6)) touchCur.moved=true;
 }, {passive:false});
 display.addEventListener('touchend', e => {
   e.preventDefault();
-  clearTimeout(lpTimer);
   // first tap on the title screen doubles as the fullscreen gesture (Android)
   if(G.screen==='title' && document.fullscreenEnabled && !document.fullscreenElement)
     document.documentElement.requestFullscreen({navigationUI:'hide'}).catch(()=>{});
-  if(!touchCur) return;                     // long-press already fired
-  if(!touchCur.moved) {
-    const now=performance.now();
-    if(now-lastTap.t<350 && Math.abs(mx-lastTap.x)<24 && Math.abs(my-lastTap.y)<24) {
-      rclicked=true; lastTap.t=0;           // double-tap -> default verb
-    } else {
-      clicked=true; lastTap={t:now, x:mx, y:my};
-    }
-  }
+  if(touchCur && !touchCur.moved) clicked=true;
   touchCur=null;
 }, {passive:false});
-display.addEventListener('touchcancel', () => { clearTimeout(lpTimer); touchCur=null; });
+display.addEventListener('touchcancel', () => { touchCur=null; });
 
 // --- fullscreen toggle button (hidden where unsupported, e.g. iOS Safari) ---
 const fsBtn=document.getElementById('fs');
@@ -293,6 +264,73 @@ if(document.fullscreenEnabled) {
   fsBtn.addEventListener('click', fsToggle);
   fsBtn.addEventListener('touchend', fsToggle, {passive:false});
 }
+
+// ===== CHIPTUNE (tiny WebAudio sequencer: square lead, triangle bass, hats) =====
+let AC=null, masterGain=null, noiseBuf=null, musicOn=true, seqNext=0, seqStep=0;
+const STEP8=60/132/2;   // one 8th note at 132 BPM
+// melody / bassline as MIDI notes, 0 = rest; 8 bars of 8ths, loops forever
+const TUNE_M=[
+  76,0,79,0,84,84,79,0,   76,0,79,0,74,0,79,0,
+  77,0,81,0,84,84,81,0,   79,77,76,74,72,0,67,0,
+  72,76,79,81,83,0,79,0,  84,0,83,81,79,0,76,0,
+  77,81,84,0,83,79,77,0,  76,74,72,74,72,0,0,0,
+];
+const TUNE_B=[
+  48,0,55,0,48,0,55,0,  43,0,50,0,43,0,50,0,
+  41,0,48,0,41,0,48,0,  48,0,55,0,43,0,55,0,
+  48,0,55,0,48,0,55,0,  45,0,52,0,45,0,52,0,
+  41,0,48,0,41,0,48,0,  43,0,43,0,48,0,48,0,
+];
+function initAudio(){
+  if(AC) return;
+  try{ AC=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ return; }
+  masterGain=AC.createGain(); masterGain.gain.value=0.13; masterGain.connect(AC.destination);
+  noiseBuf=AC.createBuffer(1,(AC.sampleRate*0.1)|0,AC.sampleRate);
+  const d=noiseBuf.getChannelData(0);
+  for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+  seqNext=AC.currentTime+0.1; seqStep=0;
+  setInterval(seqSchedule,80);
+}
+function blip(type,midi,t,dur,vol){
+  const o=AC.createOscillator(), g=AC.createGain();
+  o.type=type; o.frequency.value=440*Math.pow(2,(midi-69)/12);
+  g.gain.setValueAtTime(vol,t);
+  g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+  o.connect(g); g.connect(masterGain);
+  o.start(t); o.stop(t+dur+0.02);
+}
+function tsss(t,dur,vol){
+  const s=AC.createBufferSource(); s.buffer=noiseBuf;
+  const f=AC.createBiquadFilter(); f.type='highpass'; f.frequency.value=6500;
+  const g=AC.createGain();
+  g.gain.setValueAtTime(vol,t);
+  g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+  s.connect(f); f.connect(g); g.connect(masterGain);
+  s.start(t); s.stop(t+dur+0.02);
+}
+function seqSchedule(){
+  if(AC.state==='suspended') AC.resume();
+  while(seqNext<AC.currentTime+0.3){
+    if(musicOn){
+      const i=seqStep, t=seqNext;
+      if(TUNE_M[i]) blip('square',TUNE_M[i],t,STEP8*0.9,0.22);
+      if(TUNE_B[i]) blip('triangle',TUNE_B[i],t,STEP8*0.95,0.5);
+      if(i%2===0) tsss(t,0.03,0.05);
+      if(i%8===4) tsss(t,0.09,0.11);
+    }
+    seqStep=(seqStep+1)%TUNE_M.length;
+    seqNext+=STEP8;
+  }
+}
+const muBtn=document.getElementById('mu');
+const muToggle=e=>{
+  e.preventDefault(); e.stopPropagation();
+  musicOn=!musicOn;
+  muBtn.style.opacity=musicOn?'1':'0.35';
+  initAudio();
+};
+muBtn.addEventListener('click',muToggle);
+muBtn.addEventListener('touchend',muToggle,{passive:false});
 
 // ===== SPEECH (text above heads, LucasArts style) =====
 const VOICE = {
@@ -453,50 +491,66 @@ function drawPonySprite(px,py,frame,state) {
   const f=Math.floor(frame)%4;
   const bob=(state==='trot'||state==='approach') && (f===1||f===3) ? 1 : 0;
   const x=px-14, y=py-21+bob;
-  cx_.fillStyle='rgba(0,0,0,0.25)'; cx_.fillRect(x+2,py-1,24,2);
+  cx_.fillStyle='rgba(0,0,0,0.25)'; cx_.fillRect(x-2,py-1,28,2);
   let fl=0, bl=0;
   if(state==='trot'||state==='approach'){ if(f<2){fl=-1;bl=1;}else{fl=1;bl=-1;} }
-  const COAT='#c08a18', COATL='#dca42e', COATD='#96690c', DARK='#7a5408';
-  const MANE='#4a2e12', MANEL='#66421e';
-  // ---- legs (knee-jointed) ----
+  const COAT='#c08a18', COATL='#e0aa30', COATD='#94660a', DEEP='#6e4c06';
+  const MANE='#4a2c10', MANEL='#6a452a', HOOF='#241a0e';
+  // ---- legs: sturdy, knee-jointed ----
   const leg=(lx,off)=>{
-    R(x+lx+off, y+14, 3, 3, COATD);
-    R(x+lx+Math.sign(off)+off, y+17, 3, 3, COATD);
-    R(x+lx+Math.sign(off)+off, y+20, 3, 1, '#2a2118'); // hoof
+    R(x+lx, y+13, 3, 4, COATD);
+    R(x+lx, y+13, 1, 4, COAT);
+    R(x+lx+off, y+16, 3, 4, COATD);
+    R(x+lx+off, y+19, 3, 2, HOOF);
   };
-  leg(6,fl); leg(10,bl); leg(17,fl); leg(21,bl);
-  // ---- body: rounded barrel with shading ----
-  R(x+5, y+5, 19, 10, COAT);
-  R(x+6, y+3, 17, 2, COAT);                   // rounded top
-  R(x+7, y+3, 15, 1, COATL);                  // back highlight
-  R(x+6, y+15, 17, 1, COATD);                 // rounded bottom
-  R(x+5, y+12, 19, 3, COATD);                 // belly shade
-  R(x+20, y+5, 4, 10, COATD);                 // rump shade
-  R(x+7, y+6, 8, 4, COATL);                   // shoulder light
-  // ---- tail: flowing, two-tone ----
-  R(x+24, y+3, 3, 5, MANE); R(x+25, y+7, 3, 5, MANE);
-  R(x+26, y+11, 2, 4, MANE); R(x+24, y+3, 1, 4, MANEL);
-  // ---- neck + head (left-facing) ----
-  R(x+2, y+2, 6, 8, COAT);                    // neck
-  R(x-2, y, 8, 7, COAT);                      // head
-  R(x-2, y, 8, 1, COATL);
-  R(x-4, y+3, 5, 4, COATD);                   // muzzle
-  R(x-4, y+5, 1, 1, '#3a2a14');               // nostril
-  R(x-1, y+1, 2, 5, '#e8d8b8');               // blaze!
-  // mane along neck + forelock
-  R(x+2, y-2, 8, 3, MANE); R(x+6, y+1, 4, 6, MANE);
-  R(x+3, y-2, 5, 1, MANEL); R(x-1, y-2, 3, 3, MANE);
-  // ears
-  R(x, y-3, 2, 3, COAT); R(x+4, y-3, 2, 2, COAT);
-  R(x, y-3, 1, 2, COATD);
-  // eye with white
-  R(x+1, y+2, 2, 2, '#fff'); R(x+2, y+2, 1, 2, '#180f06');
+  leg(6,fl); leg(10,bl); leg(18,fl); leg(22,bl);
+  // ---- the round Shetland barrel ----
+  R(x+5, y+2, 20, 2, COAT);                   // rounded top
+  R(x+4, y+4, 22, 10, COAT);                  // body
+  R(x+6, y+2, 18, 1, COATL);                  // back highlight
+  R(x+7, y+5, 10, 5, COATL);                  // shoulder light
+  R(x+5, y+11, 21, 3, COATD);                 // belly shade
+  R(x+6, y+14, 18, 1, DEEP);                  // belly edge
+  R(x+21, y+3, 5, 11, COATD);                 // rump shade
+  R(x+23, y+5, 3, 7, DEEP);                   // deep rump
+  // ---- tail: thick and swishy ----
+  R(x+25, y+2, 4, 4, MANE); R(x+27, y+5, 3, 6, MANE); R(x+28, y+10, 2, 5, MANE);
+  R(x+25, y+2, 1, 4, MANEL); R(x+27, y+6, 1, 4, MANEL);
+  // ---- head group (drops when eating) ----
+  const hd = state==='eating' ? 4 : 0;
+  R(x+1, y+2+hd, 8, 9, COAT);                 // thick neck
+  R(x+1, y+2+hd, 8, 1, COATL);
+  R(x-4, y-1+hd, 9, 7, COAT);                 // head
+  R(x-4, y-1+hd, 9, 1, COATL);
+  R(x-7, y+1+hd, 4, 5, COAT);                 // muzzle
+  R(x-7, y+3+hd, 4, 3, COATD);
+  R(x-7, y+2+hd, 1, 1, HOOF);                 // nostril
+  R(x-4, y+hd, 2, 5, '#ecdcbc');              // blaze!
+  R(x-2, y+1+hd, 2, 2, '#fff');               // eye: big and up to something
+  R(x-1, y+1+hd, 1, 2, '#180f06');
+  R(x+1, y-4+hd, 2, 4, COAT);                 // ears (small, Shetland-issue)
+  R(x+1, y-4+hd, 1, 3, COATD);
+  R(x+4, y-4+hd, 2, 3, COAT);
+  // ---- the famous mane: huge and shaggy ----
+  R(x-1, y-3+hd, 3, 3, MANE);                 // forelock
+  R(x-2, y-2+hd, 2, 2, MANE);
+  R(x+2, y-3+hd, 6, 3, MANE);                 // crest
+  R(x+6, y-1+hd, 4, 5, MANE);                 // down the neck
+  R(x+8, y+2+hd, 4, 4, MANE);
+  R(x+11, y+4, 3, 3, MANE);                   // withers tuft
+  R(x+3, y-3+hd, 4, 1, MANEL);
+  R(x+7, y+hd, 2, 2, MANEL);
+  R(x+7, y+4+hd, 1, 2, MANE);                 // shaggy fringe
+  R(x+10, y+6+hd, 1, 2, MANE);
+  R(x+13, y+6, 1, 2, MANE);
   // munching jaw when eating
-  if(state==='eating' && Math.floor(G.tick/10)%2) { R(x-4,y+6,5,2,COATD); R(x-3,y+8,3,1,'#3a2a14'); }
+  if(state==='eating' && Math.floor(G.tick/10)%2) {
+    R(x-7, y+5+hd, 4, 2, COATD); R(x-6, y+7+hd, 3, 1, '#3a2a14');
+  }
   // rope to Paul
   if(state==='roped'||state==='calm') {
-    PLINE(x+2, y+5, G.player.x+5, G.player.y-14, '#a08040');
-    R(x-3, y+2, 1, 5, '#a08040'); R(x-4, y+3, 6, 1, '#8a6c34'); // halter
+    PLINE(x-3, y+3, G.player.x+5, G.player.y-14, '#a08040');
+    R(x-5, y+hd, 1, 6, '#a08040'); R(x-6, y+3+hd, 5, 1, '#8a6c34'); // halter
   }
 }
 
@@ -551,30 +605,32 @@ function drawJournalist(jx,jy,talking) {
 }
 
 function drawPoliceCarBody(x,y) {
-  // body with shading
-  R(x, y, 40, 13, '#eef0f2');
-  R(x, y, 40, 2, '#fbfcff');
-  R(x, y+10, 40, 3, '#c4c8ce');
-  R(x-1, y+2, 2, 8, '#d8dce0'); R(x+39, y+2, 2, 8, '#d8dce0'); // bumpers
-  // cab
-  R(x+3, y-5, 27, 6, '#e2e6ea');
-  R(x+3, y-5, 27, 1, '#f4f8fc');
-  R(x+5, y-4, 10, 5, '#2c4468');              // windscreen
-  R(x+6, y-4, 3, 4, '#4a6a94');               // glass glint
-  R(x+17, y-4, 11, 5, '#2c4468');
-  R(x+18, y-4, 3, 2, '#4a6a94');
-  R(x+16, y-4, 1, 5, '#c8ccd2');              // pillar
-  // battenburg ends + white door panel with livery
-  R(x, y+4, 40, 4, '#f0c020');
-  R(x, y+4, 3, 4, '#1848b0'); R(x+5, y+4, 3, 4, '#1848b0');
-  R(x+32, y+4, 3, 4, '#1848b0'); R(x+37, y+4, 3, 4, '#1848b0');
-  R(x+9, y+4, 22, 5, '#f8f8fa');
-  TXT3('POLICE', x+10, y+4, '#1848b0');
-  // wheels with hubs and arches
-  R(x+3, y+9, 9, 7, '#0c0c0e'); R(x+5, y+11, 5, 4, '#3a3a42'); R(x+6, y+12, 3, 2, '#8a8a94');
-  R(x+28, y+9, 9, 7, '#0c0c0e'); R(x+30, y+11, 5, 4, '#3a3a42'); R(x+31, y+12, 3, 2, '#8a8a94');
-  // headlight / rear
-  R(x+38, y+2, 2, 2, '#ffe9a0'); R(x, y+2, 2, 2, '#b02020');
+  // ground shadow
+  DITH(x-1,y+13,43,3,'#24262c');
+  // silhouette
+  R(x-1, y-1, 42, 12, '#10141c');
+  R(x+2, y-6, 29, 6, '#10141c');
+  // body: white with shading
+  R(x, y, 40, 10, '#f2f4f6');
+  R(x, y, 40, 1, '#ffffff');
+  R(x, y+7, 40, 3, '#c6cad2');
+  // cab roof
+  R(x+3, y-5, 27, 5, '#e8ecf0');
+  R(x+3, y-5, 27, 1, '#f8fafc');
+  // windows with glints
+  R(x+5, y-4, 10, 4, '#22384e'); R(x+6, y-4, 3, 2, '#48688c');
+  R(x+17, y-4, 11, 4, '#22384e'); R(x+18, y-4, 3, 2, '#48688c');
+  R(x+15, y-4, 2, 4, '#d0d4da');              // pillar
+  // livery
+  TXT3('POLICE', x+9, y+1, '#12308a');
+  // battenburg skirt, full length
+  for(let i=0;i<8;i++) R(x+i*5, y+6, 5, 3, i%2 ? '#0a40c0' : '#ffcf00');
+  // bumpers + lights
+  R(x-1, y+2, 1, 6, '#9aa0a8'); R(x+40, y+2, 1, 6, '#9aa0a8');
+  R(x+38, y+1, 2, 2, '#ffe9a0'); R(x, y+1, 2, 2, '#c02020');
+  // wheels: round, hubbed
+  PDISC(x+8, y+11, 4, '#0a0a0c'); PDISC(x+8, y+11, 2, '#34343c'); R(x+7, y+10, 2, 1, '#9a9aa4');
+  PDISC(x+32, y+11, 4, '#0a0a0c'); PDISC(x+32, y+11, 2, '#34343c'); R(x+31, y+10, 2, 1, '#9a9aa4');
   // lightbar base
   R(x+9, y-7, 15, 2, '#20242c');
 }
@@ -738,13 +794,24 @@ function renderStation() {
   R(184,47,13,8,'#c8ccd2'); R(184,47,13,2,'#e2e6ea'); R(196,49,3,4,'#c8ccd2');
   R(186,45,8,2,'#3a3a40'); R(182,50,2,3,'#8a8e94');
   R(176,96,32,3,'#4a4e54');                // cabinet floor shadow
-  // ---- poster left of door: TVP crest ----
-  R(94,32,28,38,'#12305a');
-  R(96,34,24,34,'#1c3e6e'); R(96,34,24,1,'#2c527e');
-  PDISC(108,45,7,'#c8a020'); PDISC(108,45,5,'#1c3e6e'); R(105,42,6,6,'#c8a020'); // crest
-  TXT3('THAMES',96,54,'#bcd4ec');
-  TXT3('VALLEY',96,60,'#bcd4ec');
-  TXT3('POLICE',97,66,'#e8d060');
+  // ---- poster left of door: Thames Valley Police ----
+  R(93,31,30,42,'#1a1408');                    // wooden frame
+  R(94,32,28,40,'#0e2a56');                    // deep blue field
+  R(94,32,28,1,'#2a4a86'); R(94,32,1,40,'#1e3a70');
+  R(95,34,26,1,'#c8d4e8'); R(95,69,26,1,'#8aa0c0');   // keyline border
+  R(95,34,1,36,'#c8d4e8'); R(120,34,1,36,'#8aa0c0');
+  // crown
+  R(105,36,6,2,'#d8b030');
+  R(105,35,1,1,'#f0d060'); R(107,34,2,1,'#f0d060'); R(110,35,1,1,'#f0d060');
+  // shield
+  R(104,39,8,6,'#d8b030');
+  R(105,45,6,2,'#d8b030'); R(106,47,4,1,'#d8b030'); R(107,48,2,1,'#b89020');
+  R(104,39,8,1,'#f0d060'); R(104,39,1,6,'#f0d060');
+  R(106,41,4,4,'#0e2a56');                     // inner field
+  R(107,42,2,2,'#d8b030');
+  TXT3('THAMES',97,52,'#dce8f4');
+  TXT3('VALLEY',97,58,'#dce8f4');
+  TXT3('POLICE',97,64,'#f0d060');
   // ---- desk: proper wood, drawers, shadow ----
   R(4,124,122,6,'#2c2018');                // floor shadow
   R(8,94,114,8,'#7a5426');
@@ -865,6 +932,11 @@ function renderMotorway() {
   // ---- distant overbridge across the carriageway ----
   R(90,50,230,3,'#3a3a44'); R(90,50,230,1,'#50505c');
   R(120,53,4,3,'#32323c'); R(200,53,4,3,'#32323c'); R(280,53,4,3,'#32323c');
+  // overhead matrix board on the bridge
+  R(184,37,52,14,'#14161c');
+  R(184,37,52,1,'#2e323c'); R(184,37,1,14,'#2e323c');
+  R(186,39,48,10,'#0a0c10');
+  TXT3('M25 SHUT',194,42,'#ffb020');
   // ---- road surface ----
   DGRAD(90,56,W-90,SCENE_H-56,['#52525a','#4c4c54','#46464e','#40404a']);
   SPECK(92,58,W-92,SCENE_H-58,'#5a5a64',17,2);
@@ -875,7 +947,7 @@ function renderMotorway() {
   DITH(230,58,10,SCENE_H-58,'#44444c'); DITH(250,58,10,SCENE_H-58,'#44444c',1);
   // oil stain + old skid
   DITH(180,100,14,8,'#30303a'); DITH(184,104,8,5,'#26262e',1);
-  R(242,70,2,26,'#38383f'); R(246,70,2,26,'#38383f');
+  DITH(242,70,3,26,'#3a3a42'); DITH(246,70,3,26,'#3a3a42',1);
   // edge line
   R(90,56,3,SCENE_H-56,'#e8e8e8'); R(93,56,1,SCENE_H-56,'#b8b8b8');
   // lane dashes + cat's eyes
@@ -889,18 +961,18 @@ function renderMotorway() {
   for(let ry=68;ry<SCENE_H;ry+=30) {
     R(305,ry,15,4,'#b8b8c2'); R(305,ry,15,1,'#d8d8e0'); R(305,ry+3,15,1,'#8a8a94');
   }
-  // ---- closure signage ----
-  const sign=(sx,sy,txt)=>{
-    R(sx-1,sy-1,20,15,'#c8c8c8'); R(sx,sy,18,13,'#d83808');
-    R(sx+2,sy+2,14,9,'#ffb830'); R(sx+2,sy+2,14,1,'#ffd870');
-    TXT3(txt,sx+3+(txt.length<4?2:0),sy+4,'#5a1c00');
-    R(sx+7,sy+14,4,12,'#5a5a62'); R(sx+7,sy+14,1,12,'#7a7a84');
-    R(sx+4,sy+26,10,2,'#3a3a42');
-  };
-  sign(96,62,'M25');
-  sign(120,66,'SHUT');
+  // ---- closure sign: one tidy board ----
+  R(102,81,3,11,'#4a4a52'); R(102,81,1,11,'#6e6e78');    // legs
+  R(119,81,3,11,'#4a4a52'); R(119,81,1,11,'#6e6e78');
+  R(99,91,9,2,'#33333b'); R(116,91,9,2,'#33333b');       // feet
+  R(95,61,34,21,'#101014');                              // black keyline
+  R(96,62,32,19,'#ffd820');                              // yellow face
+  R(96,62,32,1,'#ffe860'); R(96,80,32,1,'#d8b010');
+  R(96,62,1,19,'#ffe860'); R(127,62,1,19,'#d8b010');
+  TXT3('M25',106,65,'#101014');
+  TXT3('CLOSED',100,72,'#101014');
   // ---- cones, with stripes and shadows ----
-  for(let cn=110;cn<160;cn+=14) {
+  for(let cn=136;cn<190;cn+=14) {
     R(cn+1,88,3,3,'#e84400'); R(cn,91,5,3,'#f8f0e0'); R(cn-1,94,7,4,'#e84400');
     R(cn+1,88,1,3,'#ff7838'); R(cn-1,94,1,4,'#ff7838');
     R(cn-2,98,9,2,'#c83800'); R(cn-2,99,9,1,'#8a2800');
@@ -913,9 +985,6 @@ function renderMotorway() {
 function drawMotorwayDyn() {
   drawCarLights(96,116);
   drawCarLights(238,124);
-  // matrix board on the overbridge, scrolling its one moment of glory
-  if(Math.floor(G.tick/40)%2===0) TXT3('M25 SHUT',188,44,'#ffb020');
-  else TXT3('PONY',196,44,'#ffb020');
   if(G.flags.applePlaced && !G.flags.appleEaten2) {
     R(G.flags.appleX-2, G.flags.appleY-3, 5, 4, '#c81c1c');
     R(G.flags.appleX-2, G.flags.appleY-2, 2, 1, '#f06048');
@@ -1083,78 +1152,48 @@ function getHotspots() {
       },
     ];
     case 2: return [
+      { id:'gap', label:'gap in the fence', x:44,y:54,w:40,h:38, sx:96,sy:104, rverb:'walkto',
+        walkto:()=>tryReturnPony(),
+      },
       { id:'pony', label:'Shetland pony',
-        x:G.pony.x-16, y:G.pony.y-22, w:32, h:26,
+        x:G.pony.x-22, y:G.pony.y-26, w:44, h:30,
         sx:Math.max(100,Math.min(300,G.pony.x-24)), sy:Math.max(100,Math.min(136,G.pony.y+12)),
-        rverb:'lookat',
-        lookat:()=>{
+        tap:()=>{
           const s=G.pony.state;
-          if(s==='roped') return sayP("Roped, but still doing a small indignant dance. I should try talking him down.");
-          if(s==='calm')  return sayP("Calm at last. Time to walk him back to that gap in the fence.");
+          if(s==='roped') return calmPony();
+          if(s==='calm')  return tryReturnPony();
           if(s==='eating')return sayP("He's hoovering up that apple like it's the last one in Surrey. Now's my chance with the rope!");
-          return sayP("A Shetland pony, trotting north up the southbound carriageway. He seems excited rather than distressed. I may use that line later.");
-        },
-        talkto:()=>{
-          const s=G.pony.state;
-          if(s==='roped') return calmPony();
-          if(s==='calm')  return sayP("\"Good lad. Let's get you home.\"", ()=>say('pony',"Snrrt."));
-          if(s==='eating')return sayP("\"Enjoying that?\" He does not dignify it with a response.");
-          sayP("\"Here, boy! Come on!\"", ()=>say('pony',"NEIGH.", ()=>sayP("He gives me a look that says he has places to be. Wrong-way places.")));
-        },
-        pickup:()=>sayP("He's small, but he's not THAT small."),
-        push:()=>sayP("I'm not going to tip over a pony. This isn't that kind of police work."),
-        pull:()=>sayP("Pulling a pony by hand is how officers end up in junction 16. Via the air."),
-        open:()=>sayP("He's not a horsebox."),
-        use:()=>{
-          const s=G.pony.state;
-          if(s==='roped') return calmPony();
-          if(s==='eating')return sayP("Hands alone won't hold him. The rope, though...");
-          sayP("He's far too quick to grab. I need to lure him with something he actually wants.");
+          if(s==='approach') return sayP("Almost... let him settle into the apple first.");
+          sayP("A Shetland pony, trotting north up the southbound carriageway. He seems excited rather than distressed. I may use that line later.", ()=>
+            sayP("Far too quick to grab. I'll need to lure him over with something he actually wants."));
         },
         items:{
-          apple:(verb)=>giveApple(),
-          rope:(verb)=>{
-            if(verb==='give') return sayP("He doesn't want to HOLD the rope. Can't blame him, frankly.");
-            useRopeOnPony();
-          },
-          auth:(verb)=>sayP("I show him the road closure authorization. He remains unmoved by bureaucracy. Honestly? Respect."),
+          apple:()=>giveApple(),
+          rope:()=>useRopeOnPony(),
+          auth:()=>sayP("I show him the road closure paperwork. He remains unmoved by bureaucracy. Honestly? Respect."),
         },
       },
-      { id:'gap', label:'gap in the fence', x:50,y:58,w:32,h:26, sx:96,sy:104, rverb:'walkto',
-        lookat:()=>sayP("A pony-sized gap in the fence. The great escape started here. It can end here too."),
-        walkto:()=>tryReturnPony(), use:()=>tryReturnPony(), open:()=>sayP("It's already extremely open. That's rather the problem."),
-        close:()=>sayP("First the pony goes back through. THEN someone fixes the fence. Order of operations."),
-      },
-      { id:'field', label:'field of ponies', x:0,y:56,w:50,h:34, sx:96,sy:106, rverb:'lookat',
+      { id:'field', label:'field of ponies', x:0,y:56,w:44,h:34, sx:96,sy:106, rverb:'lookat',
         lookat:()=>sayP("The rest of the herd, watching from the field. Not one of them paid for a ticket to this."),
-        talkto:()=>say('pony',"*distant judgemental whinnying*",()=>sayP("His mates are loving this.")),
+      },
+      { id:'car2a', label:'police car', x:94,y:108,w:42,h:24, sx:120,sy:130, rverb:'talkto',
+        talkto:()=>say('cop',"All yours, Paul. We'll handle the cones.",()=>sayP("The cones do seem handled.")),
+      },
+      { id:'signs', label:'closure sign', x:95,y:61,w:34,h:32, sx:128,sy:106, rverb:'lookat',
+        lookat:()=>sayP("M25 CLOSED. Two words I never thought I'd be grateful for."),
+      },
+      { id:'cones', label:'traffic cones', x:132,y:88,w:58,h:16, sx:150,sy:110, rverb:'lookat',
+        lookat:()=>sayP("Traffic cones. The natural predator of the British motorist."),
+      },
+      { id:'barrier', label:'crash barrier', x:300,y:56,w:20,h:88, sx:290,sy:118, rverb:'lookat',
+        lookat:()=>sayP("The central reservation. Beyond it, the northbound traffic has slowed to a crawl to enjoy the show. Rubbernecking: the one thing the M25 has never once been delayed on."),
       },
       { id:'road', label:'carriageway', x:90,y:56,w:210,h:88, sx:0,sy:0, rverb:'lookat',
         lookat:()=>sayP("Three lanes of the M25, eerily empty. Usually it's nose-to-tail misery by now. The pony has achieved what decades of transport policy could not."),
         items:{
-          apple:(verb)=>giveApple(),
-          rope:(verb)=>sayP("I can't lasso the tarmac. The pony, on the other hand..."),
+          apple:()=>giveApple(),
+          rope:()=>sayP("I can't lasso the tarmac. The pony, on the other hand..."),
         },
-      },
-      { id:'car2a', label:'police car', x:94,y:108,w:42,h:24, sx:120,sy:130, rverb:'lookat',
-        lookat:()=>sayP("A Thames Valley patrol car, lights going. Very reassuring. Very blue."),
-        talkto:()=>say('cop',"All yours, Paul. We'll handle the cones.",()=>sayP("The cones do seem handled.")),
-        open:()=>sayP("Better not. The handbrake's iffy and we're on a motorway."),
-        use:()=>sayP("I'm not driving anywhere until that pony is back in his field."),
-      },
-      { id:'signs', label:'closure signs', x:96,y:62,w:44,h:32, sx:128,sy:106, rverb:'lookat',
-        lookat:()=>sayP("M25 SHUT. Two words I never thought I'd be grateful for."),
-        push:()=>sayP("The signs are doing their one job. I'll let them. Not everyone here this morning can say the same. The pony can't, for instance."),
-        pickup:()=>sayP("Tampering with traffic management? That's a level of anarchy even the pony hasn't attempted."),
-      },
-      { id:'cones', label:'traffic cones', x:108,y:88,w:52,h:16, sx:134,sy:110, rverb:'lookat',
-        lookat:()=>sayP("Traffic cones. The natural predator of the British motorist."),
-        pickup:()=>sayP("Every officer wants to take one home. None of us do. It's the code."),
-        talkto:()=>sayP("\"Good work, lads.\" The cones say nothing. Solid, dependable."),
-      },
-      { id:'barrier', label:'crash barrier', x:300,y:56,w:20,h:88, sx:290,sy:118, rverb:'lookat',
-        lookat:()=>sayP("The central reservation. Beyond it, the northbound traffic has slowed to a crawl to enjoy the show. Rubbernecking: the one thing the M25 has never once been delayed on."),
-        talkto:()=>sayP("\"Move along, please.\" The northbound traffic does not move along. One of them has binoculars."),
       },
     ];
     case 3: return [
@@ -1209,7 +1248,7 @@ function useRadio() {
   if(!G.flags.phoneAnswered) return sayP("I should probably answer that phone first. It sounds urgent. Phones always do.");
   if(G.flags.closureAuth) return sayP("The closure's already authorized. Once is policy, twice is showing off.");
   G.flags.closureAuth=true;
-  addItem('auth','authorization','Road closure authorization, M25 J15-J16. Laminated? No. Powerful? Immensely.');
+  addItem('auth','closure form','Road closure authorization, M25 J15-J16. Laminated? No. Powerful? Immensely.');
   say('paul',"All units, this is Paul Anthem, Thames Valley Police. Authorize immediate closure of the M25 southbound, junctions 15 to 16. We have a loose animal on the carriageway.");
   say('radio',"Copy that, Paul. Units en route. Carriageway closed at 06:50.", ()=>{
     sayP("06:50. The M25, shut by a pony. There's a sentence I never trained for.");
@@ -1278,12 +1317,14 @@ function calmPony() {
 function tryReturnPony() {
   if(G.pony.state==='calm') {
     sayP("This way, lad. Mind the cones.", ()=>{
-      G.pony.state='gone'; G.flags.ponyHome=true;
-      say('pony',"*triumphant returning whinny*");
-      say('narr',"07:15 AM — One Shetland pony, safely returned to his field.");
-      say('paul',"And the herd pretends nothing happened. Typical.", ()=>{
-        sayP("Hang on. Green jacket, notepad, purposeful walk... that's the press. Best look professional.", ()=>{
-          say('narr',"07:20 AM — The hard shoulder. The press has arrived.", ()=>changeScene(3));
+      walkTo(96,104, ()=>{
+        G.pony.state='gone'; G.flags.ponyHome=true;
+        say('pony',"*triumphant returning whinny*");
+        say('narr',"07:15 AM — One Shetland pony, safely returned to his field.");
+        say('paul',"And the herd pretends nothing happened. Typical.", ()=>{
+          sayP("Hang on. Green jacket, notepad, purposeful walk... that's the press. Best look professional.", ()=>{
+            say('narr',"07:20 AM — The hard shoulder. The press has arrived.", ()=>changeScene(3));
+          });
         });
       });
     });
@@ -1434,41 +1475,33 @@ function updatePony() {
 }
 
 // ============================================================
-//  VERB / SENTENCE ENGINE
+//  TAP ENGINE — one tap does the sensible thing
 // ============================================================
-function buildSentence() {
-  let s = cur.verb ? VLABEL[cur.verb] : 'Walk to';
-  if(cur.item) s += ' ' + cur.item.name + (cur.verb==='give' ? ' to' : ' with');
-  if(G.hoverHot) s += ' ' + G.hoverHot.label;
-  else if(G.hoverInv>=0 && G.inventory[G.hoverInv] && !(cur.item && cur.item.id===G.inventory[G.hoverInv].id))
-    s += ' ' + G.inventory[G.hoverInv].name;
-  return s;
-}
-function execVerb(h, verb, item) {
-  const run = ()=>{
-    if(item) {
-      const f = h.items && h.items[item.id];
-      if(f) f(verb);
-      else sayP(verb==='give' ? "I don't think it wants that." : "That doesn't seem to work.");
-    } else {
-      const f = h[verb];
-      if(typeof f==='function') f();
-      else sayP(DEFAULTS[verb]);
-    }
-  };
+// Tap a hotspot: walk over and run its default action (h.tap if
+// present, else the handler named by h.rverb, else look at it).
+// Tap an inventory item to arm it, then tap its target.
+function execTap(h) {
   resetCur();
-  if(verb==='lookat' && !item) run();
+  const run = ()=>{
+    if(h.tap) return h.tap();
+    const f = h[h.rverb||'lookat'];
+    if(typeof f==='function') f();
+    else sayP("It's exactly as interesting as it looks.");
+  };
+  if(!h.tap && (h.rverb||'lookat')==='lookat') run();   // looking happens in place
   else walkTo(h.sx||h.x+h.w/2, h.sy||G.player.y, run);
 }
-function clickInventoryItem(item) {
-  const v = cur.verb;
-  if(!v || v==='lookat') { resetCur(); return sayP(item.desc); }
-  if(v==='use' || v==='give') { cur.item=item; return; }   // await target
-  if(v==='pickup') { resetCur(); return sayP("I've already got it."); }
-  if(v==='talkto') { resetCur(); return sayP("Me and the "+item.name+" have an understanding. No words needed."); }
-  if(v==='open' && item.id==='rope') { resetCur(); return sayP("It's a coil, not a knot."); }
+function execItem(h, item) {
   resetCur();
-  sayP(DEFAULTS[v]);
+  walkTo(h.sx||h.x+h.w/2, h.sy||G.player.y, ()=>{
+    const f = h.items && h.items[item.id];
+    if(f) f('use');
+    else sayP("That doesn't seem to work.");
+  });
+}
+function tapInventoryItem(item) {
+  if(cur.item && cur.item.id===item.id) { resetCur(); sayP(item.desc); }  // second tap: examine
+  else cur.item=item;                                                     // arm it
 }
 
 // ============================================================
@@ -1481,18 +1514,9 @@ function sceneHotAt(x,y) {
   return null;
 }
 function invSlotAt(x,y) {
-  for(let i=0;i<6;i++) {
-    const col=i%2, row=(i/2)|0;
-    const sx=172+col*74, sy=UI_Y+2+row*14;
-    if(x>=sx&&x<sx+72&&y>=sy&&y<sy+13) return i;
-  }
-  return -1;
-}
-function verbCellAt(x,y) {
-  for(let i=0;i<9;i++) {
-    const col=i%3, row=(i/3)|0;
-    const vx=4+col*54, vy=UI_Y+2+row*14;
-    if(x>=vx&&x<vx+52&&y>=vy&&y<vy+13) return i;
+  for(let i=0;i<3;i++) {
+    const sx=8+i*104, sy=160;
+    if(x>=sx&&x<sx+96&&y>=sy&&y<sy+34) return i;
   }
   return -1;
 }
@@ -1521,58 +1545,42 @@ function handleInput() {
     return;
   }
 
-  if(rclicked) {
-    rclicked=false;
-    if(cur.verb||cur.item) { resetCur(); }
-    else {
-      const h=sceneHotAt(mx,my);
-      if(h) execVerb(h, h.rverb||'lookat', null);
-    }
-  }
+  if(rclicked) { rclicked=false; resetCur(); }   // right-click just cancels
 
   if(!clicked) return;
   clicked=false;
 
-  // UI panel
+  // UI panel: inventory taps
   if(my>=SCENE_H) {
-    const vi=verbCellAt(mx,my);
-    if(vi>=0) { cur.verb=VERBS[vi].id; cur.item=null; return; }
     const si=invSlotAt(mx,my);
-    if(si>=0 && G.inventory[si]) clickInventoryItem(G.inventory[si]);
-    return;
-  }
-
-  // scene click
-  const h=sceneHotAt(mx,my);
-  if(cur.item) {                       // "Use X with ___" / "Give X to ___"
-    if(h) execVerb(h, cur.verb, cur.item);
+    if(si>=0 && G.inventory[si]) tapInventoryItem(G.inventory[si]);
     else resetCur();
     return;
   }
-  if(cur.verb) {
-    if(h) execVerb(h, cur.verb, null);
+
+  // scene tap
+  const h=sceneHotAt(mx,my);
+  if(cur.item) {                       // armed item seeking a target
+    if(h) execItem(h, cur.item);
     else { resetCur(); walkTo(mx,my); }
     return;
   }
-  // no verb: walk (hotspots may intercept walk)
-  if(h && h.walkto) { execVerb(h,'walkto',null); }
-  else if(h) walkTo(h.sx||mx, h.sy||my);
+  if(h) execTap(h);
   else walkTo(mx,my);
 }
 
 function updateHover() {
-  G.hoverHot=null; G.hoverVerb=-1; G.hoverInv=-1;
+  G.hoverHot=null; G.hoverInv=-1;
   if(G.screen!=='game' || sayBusy() || G.transition>0) return;
   if(G.dialog) {
     G.dialog.hover=-1;
     for(let i=0;i<G.dialog.choices.length;i++) {
-      const cy=UI_Y+4+i*13;
-      if(mx>=6&&mx<W-6&&my>=cy-2&&my<cy+11) G.dialog.hover=i;
+      const cy=UI_Y+4+i*15;
+      if(mx>=6&&mx<W-6&&my>=cy-3&&my<cy+12) G.dialog.hover=i;
     }
     return;
   }
   if(my<SCENE_H) { G.hoverHot=sceneHotAt(mx,my); return; }
-  G.hoverVerb=verbCellAt(mx,my);
   const si=invSlotAt(mx,my);
   if(si>=0 && G.inventory[si]) G.hoverInv=si;
 }
@@ -1591,37 +1599,33 @@ function drawPanel() {
   R(0,SCENE_H,W,1,'#3a3a48');
   R(0,SCENE_H+1,W,1,'#14141c');
 
-  // sentence line
-  TXT(buildSentence(), W/2, SENT_Y+1, (cur.verb||cur.item) ? '#e8e8a0' : '#9898e8', 'center');
-
   if(G.dialog) { drawDialogPanel(); return; }
 
-  // verb grid
-  for(let i=0;i<9;i++) {
-    const col=i%3, row=(i/3)|0;
-    const vx=4+col*54, vy=UI_Y+2+row*14;
-    const sel = cur.verb===VERBS[i].id;
-    const hov = G.hoverVerb===i;
-    TXT(VERBS[i].label, vx+4, vy+3, sel ? '#ffff66' : hov ? '#8fff8f' : '#3fbf3f');
-  }
-  // divider
-  R(166,UI_Y+2,1,40,'#2a2a34');
-  // inventory
-  for(let i=0;i<6;i++) {
-    const col=i%2, row=(i/2)|0;
-    const sx=172+col*74, sy=UI_Y+2+row*14;
+  // hint line: what you're pointing at / what the armed item awaits
+  let s='';
+  if(cur.item) s='Use '+cur.item.name+' on '+(G.hoverHot ? G.hoverHot.label : '...');
+  else if(G.hoverHot) s=G.hoverHot.label;
+  TXT(s, W/2, SENT_Y+1, cur.item ? '#e8e8a0' : '#9898e8', 'center');
+
+  // inventory: three big tap-friendly slots
+  for(let i=0;i<3;i++) {
+    const sx=8+i*104, sy=160;
     const it=G.inventory[i];
+    const sel = it && cur.item && cur.item.id===it.id;
+    const hov = G.hoverInv===i && it;
+    R(sx,sy,96,34, sel ? '#26261a' : '#0e0e16');
+    const bc = sel ? '#ffff66' : hov ? '#8fff8f' : '#2e2e3c';
+    R(sx,sy,96,1,bc); R(sx,sy+33,96,1,bc);
+    R(sx,sy,1,34,bc); R(sx+95,sy,1,34,bc);
     if(!it) continue;
-    const hov = G.hoverInv===i;
-    const sel = cur.item && cur.item.id===it.id;
-    drawItemIcon(it.id, sx, sy+1);
-    TXT(it.name, sx+13, sy+3, sel ? '#ffff66' : hov ? '#8fff8f' : '#3fbf3f');
+    drawItemIcon(it.id, sx+5, sy+11);
+    TXT(it.name, sx+21, sy+14, sel ? '#ffff66' : hov ? '#8fff8f' : '#3fbf3f');
   }
 }
 function drawDialogPanel() {
   const d=G.dialog;
   for(let i=0;i<d.choices.length;i++) {
-    const cy=UI_Y+4+i*13;
+    const cy=UI_Y+4+i*15;
     const hov=d.hover===i;
     if(hov){ cx_.fillStyle='#ffff88';
       cx_.fillRect(4,cy+1,1,5); cx_.fillRect(5,cy+2,1,3); cx_.fillRect(6,cy+3,1,1); }
@@ -1689,8 +1693,7 @@ function drawTitle() {
   TXT('(c) 2003 Anthem Bros. Entertainment', W/2, 110, '#666688', 'center');
   if(Math.floor(G.tick/30)%2)
     OTXT(TOUCH?'Tap to begin':'Click to begin', W/2, 128, '#eeeeff', 'center');
-  if(TOUCH)
-    OTXT('Tap: act - Double-tap: look', W/2, 189, '#a8a8c8', 'center');
+  OTXT((TOUCH?'Tap':'Click')+' on things to interact', W/2, 189, '#a8a8c8', 'center');
 }
 
 function drawEndScreen() {
@@ -1765,7 +1768,7 @@ function drawGame() {
     cx_.fillStyle=`rgba(0,0,0,${fa})`;
     cx_.fillRect(0,0,W,H);
   }
-  drawCursor();
+  if(!TOUCH) drawCursor();
 }
 
 function loop() {
@@ -1784,8 +1787,8 @@ function loop() {
 
   cx_=fctx;
   cx_.clearRect(0,0,W,H);
-  if(G.screen==='title') { drawTitle(); drawCursor(); }
-  else if(G.screen==='end') { drawEndScreen(); drawCursor(); }
+  if(G.screen==='title') { drawTitle(); if(!TOUCH) drawCursor(); }
+  else if(G.screen==='end') { drawEndScreen(); if(!TOUCH) drawCursor(); }
   else drawGame();
 
   dctx.clearRect(0,0,display.width,display.height);
@@ -1793,6 +1796,7 @@ function loop() {
   requestAnimationFrame(loop);
 }
 loop();
+window.PQ = G;   // state handle for testing
 </script>
 </body>
 </html>
