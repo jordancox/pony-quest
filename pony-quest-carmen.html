@@ -1,0 +1,1438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
+<title>Where on the M25 is the Shetland Pony?</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{background:#000;display:flex;justify-content:center;align-items:center;
+  height:100vh;height:100dvh;overflow:hidden;
+  touch-action:none;overscroll-behavior:none;
+  -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+canvas{image-rendering:pixelated;image-rendering:crisp-edges;touch-action:none}
+#fs,#mu{position:fixed;bottom:calc(6px + env(safe-area-inset-bottom));right:calc(6px + env(safe-area-inset-right));
+  z-index:9;background:rgba(0,0,0,0.55);color:#8fff8f;border:1px solid #3fbf3f;
+  font:16px monospace;line-height:1;padding:8px 10px;border-radius:4px;display:none;cursor:pointer}
+#mu{display:block;right:auto;left:calc(6px + env(safe-area-inset-left))}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<button id="fs" title="Fullscreen">&#x26F6;</button>
+<button id="mu" title="Music">&#9835;</button>
+<script>
+'use strict';
+
+// ============================================================
+//  WHERE ON THE M25 IS THE SHETLAND PONY?
+//  A Carmen Sandiego-style investigation of the real M25
+//  Shetland pony incident (10 October 2003). All interface,
+//  no walking: travel, interview witnesses, work the PONY-DEX,
+//  issue a warrant, beat rush hour.
+// ============================================================
+
+const W = 320, H = 200;
+const SC_X = 2, SC_Y = 13, SC_W = 316, SC_H = 92;   // scene window
+
+// ===== CANVAS =====
+const display = document.getElementById('c');
+const dctx = display.getContext('2d');
+const buf = document.createElement('canvas');
+buf.width = W; buf.height = H;
+const fctx = buf.getContext('2d');
+const bg = document.createElement('canvas');
+bg.width = SC_W; bg.height = SC_H;
+const bgctx = bg.getContext('2d');
+let cx_ = fctx;
+
+function resize() {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const dpr = window.devicePixelRatio || 1;
+  const f = Math.min(vw * dpr / W, vh * dpr / H);
+  const s = Math.max(1, Math.floor(f));
+  display.width = W * s; display.height = H * s;
+  if (dpr >= 2 || f < 1) {
+    display.style.width  = Math.floor(W * f / dpr) + 'px';
+    display.style.height = Math.floor(H * f / dpr) + 'px';
+  } else {
+    display.style.width  = (W * s / dpr) + 'px';
+    display.style.height = (H * s / dpr) + 'px';
+  }
+  dctx.imageSmoothingEnabled = false;
+}
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 100));
+if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
+document.addEventListener('fullscreenchange', resize);
+resize();
+
+// ===== PIXEL HELPERS =====
+function R(x,y,w,h,c) { cx_.fillStyle=c; cx_.fillRect(x,y,w,h); }
+const BAYER4=[[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+function DGRAD(x,y,w,h,cols) {
+  const n=cols.length, bh=h/n;
+  for(let i=0;i<n;i++) R(x, Math.floor(y+i*bh), w, Math.ceil(bh)+1, cols[i]);
+  for(let i=1;i<n;i++) {
+    const by=Math.floor(y+i*bh);
+    const cfg=[[-1,4,cols[i]],[0,8,cols[i]],[1,4,cols[i-1]]];
+    for(const r of cfg){
+      const yy=by+r[0];
+      if(yy<y||yy>=y+h) continue;
+      cx_.fillStyle=r[2];
+      for(let xx=x;xx<x+w;xx++) if(BAYER4[yy&3][xx&3]<r[1]) cx_.fillRect(xx,yy,1,1);
+    }
+  }
+}
+function DGRAD_S(x,y,w,h,cols) {
+  const n=cols.length;
+  for(let yy=0;yy<h;yy++){
+    const t=n<=1?0:yy/(h-1)*(n-1);
+    const i=Math.min(n-2,Math.floor(t)), ft=t-i;
+    const c1=cols[i], c2=cols[i+1];
+    R(x,y+yy,w,1,c1);
+    if(ft>0.01){ cx_.fillStyle=c2; const lim=ft*16;
+      for(let xx=x;xx<x+w;xx++) if(BAYER4[(y+yy)&3][xx&3]<lim) cx_.fillRect(xx,y+yy,1,1);
+    }
+  }
+}
+function DITH(x,y,w,h,c,den){
+  cx_.fillStyle=c;
+  for(let yy=y;yy<y+h;yy++) for(let xx=x;xx<x+w;xx++)
+    if(BAYER4[yy&3][xx&3]<den) cx_.fillRect(xx,yy,1,1);
+}
+function PLINE(x0,y0,x1,y1,c,w) {
+  w=w||1;
+  const dx=x1-x0, dy=y1-y0, n=Math.max(Math.abs(dx),Math.abs(dy),1);
+  cx_.fillStyle=c;
+  for(let i=0;i<=n;i++)
+    cx_.fillRect(Math.round(x0+dx*i/n), Math.round(y0+dy*i/n), w, w);
+}
+function PDISC(cx,cy,r,c) {
+  cx_.fillStyle=c;
+  for(let y=-r;y<=r;y++){
+    const hw=Math.floor(Math.sqrt(r*r-y*y)+0.5);
+    cx_.fillRect(Math.round(cx-hw),Math.round(cy+y),hw*2+1,1);
+  }
+}
+// deterministic per-index random (stable across frames)
+function rr(i){ const s=Math.sin(i*127.1+3.7)*43758.545; return s-Math.floor(s); }
+
+// ===== BITMAP FONT (5x7) =====
+const FONT5={
+A:'0E11111F111111',B:'1E11111E11111E',C:'0E11101010110E',D:'1E11111111111E',
+E:'1F10101E10101F',F:'1F10101E101010',G:'0E11101711110F',H:'1111111F111111',
+I:'0E04040404040E',J:'0702020202120C',K:'11121418141211',L:'1010101010101F',
+M:'111B1515111111',N:'11191513111111',O:'0E11111111110E',P:'1E11111E101010',
+Q:'0E11111115120D',R:'1E11111E141211',S:'0F10100E01011E',T:'1F040404040404',
+U:'1111111111110E',V:'11111111110A04',W:'1111111515150A',X:'11110A040A1111',
+Y:'11110A04040404',Z:'1F01020408101F',
+a:'00000E010F110F',b:'10101E1111111E',c:'00000F1010100F',d:'01010F1111110F',
+e:'00000E111F100E',f:'06081C08080808',g:'00000F110F010E',h:'10101E11111111',
+i:'04000C0404040E',j:'0200060202120C',k:'10101214181412',l:'0C04040404040E',
+m:'00001A15151515',n:'00001E11111111',o:'00000E1111110E',p:'00001E111E1010',
+q:'00000F110F0101',r:'00001619101010',s:'00000F100E011E',t:'08081C08080906',
+u:'0000111111130D',v:'00001111110A04',w:'0000111115150A',x:'0000110A040A11',
+y:'000011110F010E',z:'00001F0204081F',
+'0':'0E13151519110E','1':'040C040404040E','2':'0E11010608101F','3':'1F02040201110E',
+'4':'02060A121F0202','5':'1F101E0101110E','6':'0608101E11110E','7':'1F010204080808',
+'8':'0E11110E11110E','9':'0E11110F01020C',
+'.':'000000000C0C00',',':'000000000C0408','!':'04040404040004','?':'0E110102040004',
+"'":'04040800000000','"':'0A0A0A00000000',':':'000C0C000C0C00',';':'000C0C000C0408',
+'-':'0000000E000000','(':'02040808080402',')':'08040202020408','*':'0004150E150400',
+'/':'01010204081010','&':'0C12140815120D','+':'0004041F040400',
+};
+const GLYPH={};
+for(const k in FONT5){ const s=FONT5[k],r=[]; for(let i=0;i<7;i++) r.push(parseInt(s.substr(i*2,2),16)||0); GLYPH[k]=r; }
+function normTxt(t){ return String(t).replace(/—/g,'-').replace(/…/g,'...').replace(/[‘’]/g,"'").replace(/[“”]/g,'"'); }
+function textW(t,s){ s=s||1; return normTxt(t).length*6*s-s; }
+function TXT(t,x,y,c,align,s) {
+  s=s||1; t=normTxt(t);
+  if(align==='center') x-=textW(t,s)/2;
+  else if(align==='right') x-=textW(t,s);
+  x=Math.round(x); y=Math.round(y);
+  cx_.fillStyle=c;
+  for(const ch of t) {
+    const g=GLYPH[ch];
+    if(g) for(let r=0;r<7;r++){ const v=g[r]; if(!v) continue;
+      for(let col=0;col<5;col++) if(v&(16>>col)) cx_.fillRect(x+col*s,y+r*s,s,s);
+    }
+    x+=6*s;
+  }
+}
+function OTXT(t,x,y,c,align,s) {
+  for(let ox=-1;ox<=1;ox++) for(let oy=-1;oy<=1;oy++)
+    if(ox||oy) TXT(t,x+ox,y+oy,'#000',align,s);
+  TXT(t,x,y,c,align,s);
+}
+// 3x5 micro font for signage
+const FONT3={
+A:'25755',B:'65656',C:'34443',D:'65556',E:'74647',F:'74644',G:'34553',H:'55755',
+I:'72227',J:'11152',K:'56655',L:'44447',M:'57555',N:'65555',O:'75557',P:'65644',
+R:'65655',S:'34216',T:'72222',U:'55557',V:'55552',X:'55255',Y:'55222',
+'0':'75557','1':'26227','2':'61247','4':'55711','5':'74616','6':'34757',' ':'00000',
+};
+function TXT3(t,x,y,c,s) {
+  s=s||1;
+  cx_.fillStyle=c; x=Math.round(x); y=Math.round(y);
+  for(const ch of t) {
+    const g=FONT3[ch];
+    if(g) for(let r=0;r<5;r++){ const v=parseInt(g[r],16);
+      for(let col=0;col<3;col++) if(v&(4>>col)) cx_.fillRect(x+col*s,y+r*s,s,s);
+    }
+    x+=4*s;
+  }
+}
+function t3w(t,s){ return t.length*4*(s||1)-(s||1); }
+function wrapText(t, max) {
+  t=normTxt(t);
+  const words=t.split(' '), lines=[];
+  let cur='';
+  for(const w of words) {
+    if((cur+' '+w).trim().length>max) { lines.push(cur.trim()); cur=w; }
+    else cur+=' '+w;
+  }
+  if(cur.trim()) lines.push(cur.trim());
+  return lines;
+}
+
+// ===== AUDIO ENGINE =====
+let AC=null, masterGain=null, comp=null, noiseBufShort=null;
+let musicOn=true, seqNext=0, seqStep=0, curTrack=null;
+const STEP8=60/120/2;
+function buildNoise(dur){
+  const b=AC.createBuffer(1,(AC.sampleRate*dur)|0,AC.sampleRate);
+  const d=b.getChannelData(0);
+  for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+  return b;
+}
+function pulse(midi,t,dur,vol){
+  if(!AC) return;
+  const o=AC.createOscillator(); o.type='square';
+  o.frequency.setValueAtTime(440*Math.pow(2,(midi-69)/12),t);
+  const g=AC.createGain();
+  g.gain.setValueAtTime(0,t);
+  g.gain.linearRampToValueAtTime(vol,t+0.004);
+  g.gain.linearRampToValueAtTime(vol*0.6,t+0.05);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur+0.05);
+  o.connect(g); g.connect(masterGain);
+  o.start(t); o.stop(t+dur+0.08);
+}
+function bassN(midi,t,dur,vol){
+  if(!AC) return;
+  const o=AC.createOscillator(), g=AC.createGain();
+  o.type='triangle';
+  o.frequency.setValueAtTime(440*Math.pow(2,(midi-69)/12),t);
+  g.gain.setValueAtTime(0,t);
+  g.gain.linearRampToValueAtTime(vol,t+0.01);
+  g.gain.setValueAtTime(vol*0.7,t+dur*0.6);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur+0.04);
+  o.connect(g); g.connect(masterGain);
+  o.start(t); o.stop(t+dur+0.06);
+}
+function padC(midis,t,dur,vol){
+  if(!AC) return;
+  for(const m of midis){
+    const o=AC.createOscillator(), g=AC.createGain();
+    o.type='sine'; o.frequency.setValueAtTime(440*Math.pow(2,(m-69)/12),t);
+    g.gain.setValueAtTime(0,t);
+    g.gain.linearRampToValueAtTime(vol,t+0.08);
+    g.gain.setValueAtTime(vol,t+dur*0.7);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+dur+0.2);
+    o.connect(g); g.connect(masterGain);
+    o.start(t); o.stop(t+dur+0.25);
+  }
+}
+function hat(t,dur,vol,hp){
+  if(!AC) return;
+  const s=AC.createBufferSource(); s.buffer=noiseBufShort;
+  const f=AC.createBiquadFilter(); f.type='highpass'; f.frequency.value=hp||7000;
+  const g=AC.createGain();
+  g.gain.setValueAtTime(vol,t);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  s.connect(f); f.connect(g); g.connect(masterGain);
+  s.start(t); s.stop(t+dur+0.02);
+}
+function kick(t,vol){
+  if(!AC) return;
+  const o=AC.createOscillator(), g=AC.createGain();
+  o.type='sine';
+  o.frequency.setValueAtTime(120,t);
+  o.frequency.exponentialRampToValueAtTime(45,t+0.08);
+  g.gain.setValueAtTime(vol,t);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+0.16);
+  o.connect(g); g.connect(masterGain);
+  o.start(t); o.stop(t+0.18);
+}
+// tracks: 32 8th-note steps
+const TRACKS={
+  // the case: wistful gumshoe minor
+  case_:{
+    lead:[69,0,0,72, 76,0,74,72, 69,0,0,0, 71,0,72,74,
+          76,0,0,79, 77,0,76,74, 72,0,71,0, 69,0,0,0],
+    bass:[45,0,45,0, 41,0,41,0, 43,0,43,0, 45,0,44,0,
+          41,0,41,0, 43,0,43,0, 40,0,40,0, 45,0,0,0],
+    pad:[[45,48,52],0,0,0, [41,45,48],0,0,0, [43,47,50],0,0,0, [45,48,52],0,0,0,
+         [41,45,48],0,0,0, [43,47,50],0,0,0, [40,44,47],0,0,0, [45,48,52],0,0,0],
+    drums:'light',
+  },
+  // out on the motorway: tense
+  tense:{
+    lead:[81,0,80,81, 0,84,0,81, 0,80,0,76, 0,0,77,80,
+          81,0,80,81, 0,86,0,84, 0,81,0,80, 76,0,0,0],
+    bass:[33,0,33,33, 0,33,0,36, 38,0,38,38, 0,38,0,41,
+          40,0,40,40, 0,40,0,43, 45,0,44,0, 40,0,36,0],
+    pad:0,
+    drums:'drive',
+  },
+  // case closed: jaunty
+  win:{
+    lead:[76,79,84,0, 79,76,72,0, 74,77,81,0, 77,74,72,0,
+          76,79,84,88, 86,84,81,0, 79,81,83,84, 84,0,0,0],
+    bass:[48,0,52,0, 55,0,52,0, 50,0,53,0, 55,0,53,0,
+          48,0,52,0, 55,0,57,0, 55,0,53,0, 48,0,0,0],
+    pad:[[48,52,55],0,0,0, 0,0,0,0, [50,53,57],0,0,0, 0,0,0,0,
+         [48,52,55],0,0,0, [53,57,60],0,0,0, [50,55,59],0,0,0, [48,52,55],0,0,0],
+    drums:'jaunty',
+  },
+};
+function initAudio(){
+  if(AC) return;
+  try{ AC=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ return; }
+  masterGain=AC.createGain(); masterGain.gain.value=0.0;
+  comp=AC.createDynamicsCompressor();
+  comp.threshold.value=-14; comp.knee.value=12; comp.ratio.value=3; comp.attack.value=0.003; comp.release.value=0.12;
+  masterGain.connect(comp); comp.connect(AC.destination);
+  masterGain.gain.setValueAtTime(0,AC.currentTime);
+  masterGain.gain.linearRampToValueAtTime(0.3,AC.currentTime+1.2);
+  noiseBufShort=buildNoise(0.06);
+  curTrack=TRACKS.case_;
+  seqNext=AC.currentTime+0.1; seqStep=0;
+  setInterval(seqSchedule,60);
+}
+function setTrack(name){
+  const nt=TRACKS[name];
+  if(nt && nt!==curTrack){ curTrack=nt; seqStep=0; if(AC) seqNext=Math.max(seqNext,AC.currentTime+0.1); }
+}
+function seqSchedule(){
+  if(!AC||!curTrack) return;
+  if(AC.state==='suspended') AC.resume();
+  while(seqNext<AC.currentTime+0.3){
+    if(musicOn){
+      const i=seqStep%32, t=seqNext, tr=curTrack;
+      const L=tr.lead, B=tr.bass, P=tr.pad, D=tr.drums;
+      if(L&&L[i]) pulse(L[i],t,STEP8*0.92,0.15);
+      if(B&&B[i]) bassN(B[i],t,STEP8*1.8,0.2);
+      if(P&&P[i]) padC(P[i],t,STEP8*4,0.045);
+      if(D==='light'){ if(i%4===0) hat(t,0.04,0.04,8000); if(i%8===4) kick(t,0.1); }
+      else if(D==='drive'){ if(i%2===0) hat(t,0.03,0.05,7500); if(i%4===0) kick(t,0.16); if(i%8===4) hat(t,0.08,0.09,4000); }
+      else if(D==='jaunty'){ if(i%4===0) hat(t,0.04,0.05,8000); if(i%4===2) kick(t,0.13); if(i%8===6) hat(t,0.06,0.07,5000); }
+    }
+    seqStep++;
+    seqNext+=STEP8;
+  }
+}
+// sfx
+function sfxClick(){ if(AC) pulse(88,AC.currentTime,0.03,0.05); }
+function sfxPage(){ if(AC) pulse(83,AC.currentTime,0.03,0.05); }
+function sfxClue(){ if(!AC) return; const t=AC.currentTime; [76,80,83,88].forEach((m,i)=>pulse(m,t+i*0.07,0.08,0.1)); }
+function sfxStamp(){ if(!AC) return; kick(AC.currentTime,0.3); bassN(33,AC.currentTime,0.15,0.3); }
+function sfxWrong(){ if(!AC) return; const t=AC.currentTime; bassN(44,t,0.14,0.22); bassN(38,t+0.18,0.3,0.22); }
+function sfxTravel(){ if(!AC) return; const t=AC.currentTime; hat(t,0.35,0.12,1500); bassN(36,t,0.3,0.18); }
+function sfxFanfare(){ if(!AC) return; const t=AC.currentTime; [72,76,79,84,88].forEach((m,i)=>pulse(m,t+i*0.09,0.14,0.13)); padC([60,64,67],t+0.4,0.8,0.06); }
+const muBtn=document.getElementById('mu');
+const muToggle=e=>{
+  e.preventDefault(); e.stopPropagation();
+  musicOn=!musicOn;
+  muBtn.style.opacity=musicOn?'1':'0.35';
+  initAudio();
+};
+muBtn.addEventListener('click',muToggle);
+const fsBtn=document.getElementById('fs');
+if('ontouchstart' in window) fsBtn.style.display='block';
+fsBtn.addEventListener('click',e=>{
+  e.preventDefault();
+  if(!document.fullscreenElement){ if(document.documentElement.requestFullscreen) document.documentElement.requestFullscreen(); }
+  else document.exitFullscreen();
+});
+
+// ============================================================
+//  CASE DATA
+// ============================================================
+const MANES=['BLOND','BLACK','GINGER'];
+const HEIGHTS=['SMALL','VERY SMALL','FRANKLY RIDICULOUS'];
+const TEMPERS=['EXCITED','DISTRESSED','UNBOTHERED'];
+const FEATS=['WHITE STAR','ONE WHITE SOCK','MAGNIFICENT TAIL','BITES'];
+const CATS=[
+  {key:'mane',  label:'MANE',      vals:MANES},
+  {key:'height',label:'HEIGHT',    vals:HEIGHTS},
+  {key:'temper',label:'TEMPERAMENT',vals:TEMPERS},
+  {key:'feat',  label:'FEATURE',   vals:FEATS},
+];
+// suspects: every combo unique (even on any 3 of 4 traits)
+const PONIES=[
+  {name:'MISTY',  coat:'#b0a49c', mane:0,height:0,temper:0,feat:0},
+  {name:'BARNABY',coat:'#6a4a2a', mane:1,height:1,temper:1,feat:1},
+  {name:'DUCHESS',coat:'#c8b088', mane:0,height:2,temper:2,feat:2},
+  {name:'CLIVE',  coat:'#a05828', mane:2,height:0,temper:1,feat:3},
+  {name:'PEANUT', coat:'#8a5a3a', mane:2,height:2,temper:0,feat:1},
+  {name:'MARPLE', coat:'#84848c', mane:1,height:0,temper:2,feat:0},
+  {name:'TITAN',  coat:'#4a3a30', mane:0,height:1,temper:0,feat:3},
+  {name:'GARY',   coat:'#7a6a5a', mane:1,height:2,temper:1,feat:2},
+];
+const MANEC=['#e8d080','#22201e','#c06020'];
+const CLUETEXT={
+  mane:[
+    "Lovely blond mane on it. Like a tiny Rod Stewart doing a runner.",
+    "Jet black mane. Very dramatic. Very... nightclub.",
+    "Ginger mane, glowing in the headlights. Almost majestic. Almost.",
+  ],
+  height:[
+    "Small. I mean, they're all small, aren't they. This one was standard-issue small.",
+    "Tiny thing. Barely came up to my bumper, and I drive a Corsa.",
+    "So small I genuinely thought it was a large dog until it neighed at me. Frankly ridiculous.",
+  ],
+  temper:[
+    "And happy? It looked THRILLED. Living its absolute best life.",
+    "Poor thing looked worried sick. Kept checking over its shoulder like it owed someone money.",
+    "Completely unbothered. Strolled past like it pays road tax and knows its rights.",
+  ],
+  feat:[
+    "It had a little white star on its forehead. I noticed because it looked me dead in the eye.",
+    "One white sock. Just the one. Very fashion-forward.",
+    "The TAIL on that thing. Like a shampoo advert. I nearly crashed.",
+    "It bit me. On the elbow. I'd lead with that in your report.",
+  ],
+};
+const ROUTECLUE=[
+  "It squeezed through that gap in the fence about six-ish and went clip-clopping down the old lane towards the main roads. Very determined. Had places to be.",
+  "It went straight past me and off towards the motorway junction - the big one, Junction 15, where the M4 comes in. I shouted 'no' at it. It did not care.",
+  "It trotted down the slip road onto the southbound carriageway. And then - I want to be accurate here - it turned round and headed NORTH. On the SOUTHBOUND. The wrong way.",
+  "Last I saw, it was weaving up the middle towards Junction 16, bold as brass, four coppers behind it running like it's a works do.",
+];
+const ROUTESHORT=[
+  'Through the fence, down the lane',
+  'To J15, the M4 interchange',
+  'Onto the southbound - going NORTH',
+  'Up the middle towards J16',
+];
+
+// witness portrait specs
+const P_TED    ={skin:'#c8926a',hat:'flat',  style:'crop', hair:'#b8b8b0',mouth:'flat', stubble:1,torso:'#5a5040'};
+const P_BRACKEN={skin:'#e8b088',hat:'none',  style:'curly',hair:'#d8d8d8',mouth:'open', glasses:1,torso:'#7a3a8a',extra:'dog'};
+const P_TREV   ={skin:'#d8a078',hat:'none',  style:'side', hair:'#4a3a28',mouth:'smile',torso:'#e8e8e8'};
+const P_PRIYA  ={skin:'#a86a42',hat:'band',  style:'bun',  hair:'#181818',mouth:'open', torso:'#38b8a0'};
+const P_COLIN  ={skin:'#e0a882',hat:'postman',style:'crop',hair:'#888880',mouth:'frown',torso:'#38487a'};
+const P_OKAFOR ={skin:'#7a4a2e',hat:'police',style:'crop', hair:'#181818',mouth:'flat', hivis:1};
+const P_DAVE   ={skin:'#e8b090',hat:'none',  style:'bald', hair:'#000',   mouth:'open', stubble:1,torso:'#c04028'};
+const P_KEITH  ={skin:'#d8a078',hat:'beanie',style:'crop', hair:'#666660',mouth:'frown',hivis:1};
+const P_MARG   ={skin:'#e8b088',hat:'none',  style:'curly',hair:'#c87828',mouth:'flat', glasses:1,torso:'#4a6a9a'};
+const P_NIGE   ={skin:'#c89468',hat:'helmet',style:'crop', hair:'#333',   mouth:'open', torso:'#282830'};
+const P_DARREN ={skin:'#e0a882',hat:'cap',   style:'crop', hair:'#3a2a1a',mouth:'smile',torso:'#c8c8c8'};
+const P_HUGHES ={skin:'#e8b088',hat:'police',style:'crop', hair:'#b06828',mouth:'flat', hivis:1};
+const P_BAZ    ={skin:'#d09a70',hat:'beanie',style:'crop', hair:'#444440',mouth:'smile',stubble:1,hivis:1};
+const P_EMMA   ={skin:'#e8bc96',hat:'none',  style:'long', hair:'#7a4a20',mouth:'open', torso:'#a83858',extra:'phone'};
+const P_PAUL   ={skin:'#e0a882',hat:'none',  style:'side', hair:'#5a4632',mouth:'flat', torso:'#2a3048',extra:'tie'};
+
+// trail: 5 locations. roles: 'route' | 'trait' | 'gag'
+const TRAIL=[
+  { id:'field', name:'THE FIELD, NEAR DENHAM', short:'THE FIELD',
+    ambient:"06:30. A field near Denham. Dew, mist, and one pony-shaped hole in the headcount. The fence has a gap in it. The gap looks smug.",
+    witnesses:[
+      {name:'TED GRIMBLE',job:'Farmer',p:P_TED,role:'trait',flav:[
+        "Missing? 'Course one's missing. Son, I've got forty-one Shetlands and a headcount problem.",
+        "Which one? Could not tell you. They keep swapping positions. I suspect they do it deliberately. But I'll tell you what I did notice about the one that legged it..."]},
+      {name:'MRS BRACKEN',job:'Dog walker',p:P_BRACKEN,role:'route',flav:[
+        "Oh, it's about TIME someone official turned up. Biscuit and I have been out here since half past five and we have SEEN things."]},
+      {name:'THE HERD',job:'40 remaining Shetlands',p:null,ponyP:{coat:'#6a5a48',mane:1,temper:2,feat:-1},role:'gag',flav:[
+        "You address the remaining Shetlands. They regard you in total silence.",
+        "One of them slowly eats a thistle while maintaining eye contact. The interview concludes. You write 'possible accomplices' in your casebook and move on."]},
+    ]},
+  { id:'lane', name:'THE LANE, IVER HEATH', short:'THE LANE',
+    ambient:"A narrow lane, hedges still dripping. A milk float idles. Somewhere ahead: the M25, entirely unprepared.",
+    witnesses:[
+      {name:'TREV',job:'Milk float driver',p:P_TREV,role:'route',flav:[
+        "Nearly had me off the float! Came out of the mist like a small hairy ghost. Forty years of milk and I've never once been overtaken on this lane. Until today."]},
+      {name:'PRIYA',job:'Jogger',p:P_PRIYA,role:'trait',flav:[
+        "I was on my second lap. I don't stop for anything - not rain, not blisters, not my ex. I stopped for this."]},
+      {name:'COLIN',job:'Postman',p:P_COLIN,role:'gag',flav:[
+        "Twenty-two years on this round. Bitten by dogs, chased by geese, once threatened by a swan with a personal grudge. This morning was a first.",
+        "It overtook me. I do this lane at a brisk professional pace, and it OVERTOOK me. I have never felt so judged."]},
+    ]},
+  { id:'slip', name:'J15 SLIP ROAD (M4 INTERCHANGE)', short:'J15 SLIP ROAD',
+    ambient:"The J15 slip road. Cones everywhere. Blue lights bounce off the big M4 interchange signs. Somewhere a radio crackles the word 'pony', twice.",
+    witnesses:[
+      {name:'PC OKAFOR',job:'Traffic officer',p:P_OKAFOR,role:'route',flav:[
+        "First call came in at 06:30. We shut the road at 06:50. You want to know where it went? So do my four colleagues, who are currently jogging."]},
+      {name:'BIG DAVE',job:'Lorry driver',p:P_DAVE,role:'trait',flav:[
+        "Forty tonne of frozen peas, and I'm doing an emergency stop for something the size of a footstool. Got a proper look at it, mind."]},
+      {name:'KEITH',job:'Cone operative',p:P_KEITH,role:'gag',flav:[
+        "Nobody respects the cones. Cars? No. Vans? No. And today I learn that ponies? ALSO no.",
+        "Went straight through my taper. Fifteen years of coning and I've never seen a cleaner line. Disrespectful. Beautiful, but disrespectful."]},
+    ]},
+  { id:'carr', name:'SOUTHBOUND CARRIAGEWAY, WRONG WAY', short:'SOUTHBOUND M25',
+    ambient:"The southbound carriageway. Three lanes of headlights, none of them moving. Somewhere out there, travelling north with total conviction, is your suspect.",
+    witnesses:[
+      {name:'MARGARET',job:'Coach driver',p:P_MARG,role:'route',flav:[
+        "Fifty-two schoolchildren behind me, all chanting 'PO-NY, PO-NY'. So yes, officer, I got a good long look."]},
+      {name:'NIGE',job:'Motorcycle courier',p:P_NIGE,role:'trait',flav:[
+        "I filter through everything, me. Gridlock, roadworks, weddings. This morning I got filtered PAST. Take a moment with that."]},
+      {name:'DARREN',job:'Van driver',p:P_DARREN,role:'gag',flav:[
+        "Am I bothered about the delay? Yes. Did I also honk the horn to cheer it on? ...No comment.",
+        "All I'll say is: it was going the wrong way with more confidence than I have ever felt about anything."]},
+    ]},
+  { id:'resv', name:'CENTRAL RESERVATION, NEAR J16', short:'NEAR J16',
+    ambient:"The central reservation near J16. Officers. Onlookers. And there - behind the crash barrier, cool as you like - the pony. Eating the central reservation.",
+    witnesses:[
+      {name:'PC HUGHES',job:'Officer at scene',p:P_HUGHES,role:'gag',flav:[
+        "It's just there. Behind the barrier. Eating the central reservation.",
+        "Four officers and several members of the public are ready to move the moment you've got a warrant naming the right pony. This is the Home Counties, detective. We do this PROPERLY."]},
+      {name:'BAZ',job:'Recovery driver',p:P_BAZ,role:'gag',flav:[
+        "I can recover anything. Jackknifed artic? Done it. Caravan in a ditch? Twice on Sundays. They will not let me winch the pony.",
+        "Health and safety gone mad, that's what this is."]},
+      {name:'EMMA',job:'Commuter',p:P_EMMA,role:'gag',flav:[
+        "I got a photo of it on my new phone! Camera phone. It's the future.",
+        "It's forty pixels of beige. But when I tell this story in twenty years, I will have PROOF."]},
+    ]},
+];
+// decoy destinations
+const DECOYS=[
+  {n:'HEATHROW AIRPORT',b:'Planes. Famously few ponies.',scene:'air',
+   txt:"You scan the taxiways. A baggage handler shakes his head slowly. 'Pony? This is Terminal 4, mate. Nothing that exciting has ever happened here.'"},
+  {n:'SOUTH MIMMS SERVICES',b:'The glamour of the M25.',scene:'svc',
+   txt:"The services are serving. A man eating a full English at 6am looks up. 'Seen a pony?' he says. 'I've seen things, son. But no pony.'"},
+  {n:'STAINES HIGH STREET',b:'It could be shopping.',scene:'town',
+   txt:"Staines is asleep. A cat regards you from a bin. It has seen no pony, and would not tell you if it had."},
+  {n:'CLACKET LANE SERVICES',b:'Wrong side of the M25 entirely.',scene:'svc',
+   txt:"Half the M25 later: no pony. A cleaner points at a 'wet floor' sign as if it explains everything. In a way, it does."},
+  {n:'JUNCTION 14',b:'The Heathrow spur.',scene:'air',
+   txt:"J14. The Heathrow spur. Lorries, drizzle, regret. No pony has ever been here. You suspect no pony ever will."},
+  {n:'RICKMANSWORTH',b:'Sounds plausible.',scene:'town',
+   txt:"Rickmansworth remains lovely and entirely pony-free. A paperboy stares at you. You stare back. Nothing is learned."},
+  {n:'WINDSOR',b:'They do have horses...',scene:'town',
+   txt:"Windsor has many fine horses, all accounted for and all considerably taller than your suspect. A guardsman does not blink."},
+  {n:'THE A40',b:'A road. Not the road.',scene:'town',
+   txt:"The A40 stretches out, pony-less in both directions. A man at a bus stop says he saw a fox once. You thank him. Time passes."},
+];
+const BRIEF_PAGES=[
+  "Morning. Paul Anthem, Thames Valley Police press office. It is 06:30 on Friday the 10th of October, and we have a situation I will shortly be describing to the nation as 'minor'.",
+  "A Shetland pony is loose on or near the M25. We do not know which pony. The farmer has forty-one of them and, quote, 'a headcount problem'.",
+  "Your job: follow the trail. Interview witnesses. The PONY-DEX has every local suspect on file - narrow it down, name the animal, and issue a warrant. Then our officers move in.",
+  "Catch it before 08:00 and I look like a genius. Fail, and I am live on the Nine O'Clock News redefining the word 'closed'. The clock is running, detective. Good luck.",
+];
+function pressLine(m){
+  if(m>=80) return "PAUL ANTHEM: Define 'closed'. The motorway is... resting.";
+  if(m>=70) return "PAUL ANTHEM: I want to stress that at no point was anyone in any danger. Especially me.";
+  if(m>=55) return "PAUL ANTHEM: The pony is assisting officers with their enquiries.";
+  if(m>=45) return "PAUL ANTHEM: Officers are in complete control of the situation.";
+  if(m>=30) return "PAUL ANTHEM: The pony seems excited rather than distressed.";
+  if(m>=20) return "PAUL ANTHEM: The M25 is closed between J15 and J16. Briefly. Barely.";
+  return "PAUL ANTHEM: We have a minor traffic management situation on the M25.";
+}
+
+// ============================================================
+//  GAME STATE
+// ============================================================
+let G=null, tick=0;
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=(Math.random()*(i+1))|0; [a[i],a[j]]=[a[j],a[i]]; } return a; }
+function newGame(){
+  const culprit=(Math.random()*PONIES.length)|0;
+  // assign one trait category to each of locations 0..3 (shuffled)
+  const cats=shuffle([0,1,2,3]);
+  // build witness pages: flavour + clue page (clue pages flagged)
+  const trail=TRAIL.map((L,li)=>{
+    const ws=L.witnesses.map(w=>{
+      const pages=w.flav.map(t=>({t,clue:null}));
+      if(w.role==='route' && li<4) pages.push({t:ROUTECLUE[li],clue:{type:'route',loc:li}});
+      if(w.role==='trait' && li<4){
+        const c=CATS[cats[li]];
+        pages.push({t:CLUETEXT[c.key][PONIES[culprit][c.key]],clue:{type:'trait',cat:cats[li]}});
+      }
+      return {...w,pages};
+    });
+    // travel options: correct next + 3 decoys
+    let opts=null;
+    if(li<4){
+      const d=shuffle(DECOYS.slice()).slice(0,3).map(x=>({...x,decoy:true}));
+      opts=shuffle([{n:TRAIL[li+1].short,b:'Follow the trail.',next:li+1},...d]);
+    }
+    return {...L,witnesses:ws,opts};
+  });
+  G={
+    mode:'title', mins:0, loc:0, trail, culprit,
+    talked:{}, seenClue:{}, routeKnown:[], traits:{mane:null,height:null,temper:null,feat:null},
+    warrant:null, dexSel:-1, wrongTurns:0, interviews:0,
+    pages:[], page:0, pageDone:null, pagePortrait:null, pageName:'', pageJob:'',
+    msg:null, decoy:null, mx:-9, my:-9, bgKey:'', endKind:'', caughtAt:0,
+    tickerX:W,
+  };
+  setMsg(trail[0].ambient);
+}
+function setMsg(t){ G.msg=wrapText(t,51); }
+function clockStr(m){ m=390+m; return ('0'+((m/60)|0)).slice(-2)+':'+('0'+(m%60)).slice(-2); }
+function addMins(n){
+  G.mins+=n;
+  if(G.mins>=90 && G.mode!=='end'){ endGame('gridlock'); }
+}
+function skyPhase(){ return G.mins<15?0 : G.mins<40?1 : 2; }
+function endGame(kind){
+  G.endKind=kind; G.mode='end'; G.bgKey='';
+  if(kind==='win'){ setTrack('win'); sfxFanfare(); }
+  else { sfxWrong(); }
+}
+function rankFor(m){
+  if(m<=45) return 'CHIEF INSPECTOR OF PONIES';
+  if(m<=67) return 'DETECTIVE SERGEANT (MOUNTED)';
+  return 'SPECIAL CONSTABLE (PROBATIONARY)';
+}
+
+// ============================================================
+//  PORTRAITS (40x40, parametric)
+// ============================================================
+function drawFace(x,y,p){
+  // backdrop
+  DGRAD(x,y,40,40,['#3a4468','#2e3656','#242a46']);
+  DITH(x,y,40,12,'#4a5478',5);
+  // torso
+  const tc=p.hivis?'#e8d820':p.torso||'#555';
+  R(x+6,y+30,28,10,tc); R(x+8,y+28,24,2,tc);
+  if(p.hivis){ R(x+6,y+33,28,3,'#c8c8c8'); DITH(x+6,y+33,28,3,'#f8f8f8',8); }
+  if(p.extra==='tie'){ R(x+13,y+28,14,2,'#e8e4d8'); R(x+25,y+28,2,2,'#e8e4d8');
+    R(x+19,y+30,3,8,'#8a2030'); }
+  // head
+  R(x+12,y+8,16,20,p.skin);
+  R(x+13,y+7,14,1,p.skin); R(x+13,y+28,14,1,p.skin);
+  R(x+10,y+16,2,5,p.skin); R(x+28,y+16,2,5,p.skin); // ears
+  // hair
+  const hc=p.hair;
+  if(p.style==='crop'){ R(x+12,y+6,16,4,hc); R(x+11,y+8,2,4,hc); R(x+27,y+8,2,4,hc); }
+  else if(p.style==='side'){ R(x+12,y+6,16,4,hc); R(x+12,y+6,6,6,hc); R(x+27,y+8,2,5,hc); }
+  else if(p.style==='curly'){ R(x+11,y+5,18,5,hc); DITH(x+10,y+4,20,8,hc,9); R(x+9,y+8,3,8,hc); R(x+28,y+8,3,8,hc); }
+  else if(p.style==='bun'){ R(x+12,y+6,16,3,hc); R(x+26,y+3,6,6,hc); }
+  else if(p.style==='long'){ R(x+11,y+5,18,4,hc); R(x+9,y+7,4,18,hc); R(x+27,y+7,4,18,hc); }
+  else if(p.style==='bald'){ DITH(x+12,y+7,16,2,'#00000030',0); }
+  // hats (over hair)
+  if(p.hat==='flat'){ R(x+10,y+4,20,4,'#7a6a4a'); DITH(x+10,y+4,20,4,'#5a4c34',6); R(x+24,y+8,7,2,'#5a4c34'); }
+  else if(p.hat==='police'){ R(x+10,y+1,20,6,'#181c2e'); R(x+9,y+7,22,2,'#000'); R(x+18,y+3,4,3,'#d8b048'); R(x+10,y+1,20,1,'#2a3050'); }
+  else if(p.hat==='postman'){ R(x+10,y+3,20,4,'#232c4e'); R(x+10,y+6,20,1,'#c03030'); R(x+24,y+7,7,2,'#10152a'); }
+  else if(p.hat==='beanie'){ R(x+10,y+2,20,7,'#e07818'); R(x+10,y+7,20,2,'#c05808'); }
+  else if(p.hat==='band'){ R(x+11,y+8,18,3,'#d83848'); }
+  else if(p.hat==='cap'){ R(x+10,y+3,20,5,'#3a5a3a'); R(x+24,y+7,8,2,'#2a462a'); }
+  else if(p.hat==='helmet'){
+    R(x+8,y+2,24,10,'#c82828'); R(x+8,y+10,4,14,'#c82828'); R(x+28,y+10,4,14,'#c82828');
+    R(x+8,y+2,24,2,'#e85858'); R(x+12,y+10,16,2,'#181818');
+  }
+  // eyes/brows
+  R(x+15,y+15,2,2,'#1a1410'); R(x+23,y+15,2,2,'#1a1410');
+  R(x+15,y+15,1,1,'#fff'); R(x+23,y+15,1,1,'#fff');
+  R(x+14,y+12,4,1,hc==='#000'?'#333':hc); R(x+22,y+12,4,1,hc==='#000'?'#333':hc);
+  if(p.glasses){ R(x+13,y+13,6,5,'#00000000');
+    PLINE(x+13,y+13,x+18,y+13,'#e8e0c8'); PLINE(x+13,y+18,x+18,y+18,'#e8e0c8');
+    PLINE(x+13,y+13,x+13,y+18,'#e8e0c8'); PLINE(x+18,y+13,x+18,y+18,'#e8e0c8');
+    PLINE(x+22,y+13,x+27,y+13,'#e8e0c8'); PLINE(x+22,y+18,x+27,y+18,'#e8e0c8');
+    PLINE(x+22,y+13,x+22,y+18,'#e8e0c8'); PLINE(x+27,y+13,x+27,y+18,'#e8e0c8');
+    R(x+19,y+15,3,1,'#e8e0c8'); }
+  // nose + mouth
+  R(x+19,y+18,2,3,shade(p.skin,-30));
+  if(p.stubble) DITH(x+13,y+22,14,6,'#00000060',5);
+  if(p.mouth==='smile'){ R(x+16,y+24,8,1,'#7a3428'); R(x+15,y+23,1,1,'#7a3428'); R(x+24,y+23,1,1,'#7a3428'); }
+  else if(p.mouth==='open'){ R(x+16,y+23,8,3,'#5a1c18'); R(x+17,y+23,6,1,'#e8e4d8'); }
+  else if(p.mouth==='frown'){ R(x+16,y+24,8,1,'#7a3428'); R(x+15,y+25,1,1,'#7a3428'); R(x+24,y+25,1,1,'#7a3428'); }
+  else R(x+16,y+24,8,1,'#7a3428');
+  // extras
+  if(p.extra==='dog'){ // Biscuit peeks in
+    R(x+1,y+31,9,9,'#c8a050'); R(x+0,y+28,3,5,'#c8a050'); R(x+8,y+28,3,5,'#a87c34');
+    R(x+3,y+34,1,1,'#000'); R(x+7,y+34,1,1,'#000'); R(x+4,y+37,3,2,'#5a3a18');
+  }
+  if(p.extra==='phone'){ // 2003 brick, held aloft
+    R(x+32,y+16,6,12,'#3a3a42'); R(x+33,y+18,4,4,'#68c868'); R(x+34,y+12,1,4,'#3a3a42');
+  }
+}
+function shade(hex,d){
+  const n=parseInt(hex.slice(1),16);
+  const r=Math.max(0,Math.min(255,(n>>16)+d)),g=Math.max(0,Math.min(255,((n>>8)&255)+d)),b=Math.max(0,Math.min(255,(n&255)+d));
+  return '#'+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1);
+}
+// pony portrait (40x40) from trait spec {coat,mane,temper,feat}
+function drawPonyP(x,y,p){
+  DGRAD(x,y,40,40,['#3a5a2e','#2e4a24','#243a1c']);
+  DITH(x,y+32,40,8,'#4a6a34',6);
+  const coat=p.coat, dk=shade(coat,-40), mn=MANEC[p.mane];
+  // neck+shoulder
+  R(x+2,y+26,20,14,coat); R(x+2,y+26,20,2,shade(coat,20));
+  // head: forehead block + muzzle block
+  R(x+14,y+6,16,16,coat); R(x+8,y+16,14,12,coat);
+  R(x+8,y+26,10,2,dk); // chin
+  // ears
+  const t=p.temper;
+  if(t===0){ R(x+16,y+1,3,6,coat); R(x+24,y+1,3,6,coat); R(x+17,y+2,1,4,dk); R(x+25,y+2,1,4,dk); }
+  else if(t===1){ R(x+13,y+4,5,3,coat); R(x+24,y+3,4,4,coat); }
+  else { R(x+16,y+2,3,5,coat); R(x+24,y+4,4,3,coat); }
+  // mane + forelock
+  R(x+28,y+4,6,26,mn); DITH(x+26,y+6,4,22,mn,8);
+  R(x+15,y+5,10,3,mn); R(x+14,y+7,4,4,mn);
+  // eye by temperament
+  if(t===0){ R(x+20,y+12,3,3,'#141210'); R(x+20,y+12,1,1,'#fff'); R(x+19,y+10,5,1,dk); }
+  else if(t===1){ R(x+20,y+13,3,2,'#141210'); PLINE(x+19,y+11,x+23,y+12,dk); R(x+21,y+16,1,2,'#6898d8'); }
+  else { R(x+20,y+13,3,2,'#141210'); R(x+20,y+12,3,1,dk); }
+  // nostril + mouth
+  R(x+10,y+22,2,2,dk);
+  if(p.feat===3){ R(x+9,y+25,7,2,'#e8e4d8'); R(x+9,y+24,7,1,dk); } // teeth
+  else PLINE(x+9,y+25,x+14,y+25,dk);
+  // white star
+  if(p.feat===0){ R(x+21,y+8,2,2,'#f0ece0'); R(x+20,y+9,4,1,'#f0ece0'); R(x+21,y+7,2,1,'#f0ece0'); }
+  // magnificent tail sweeping in
+  if(p.feat===2){ for(let i=0;i<14;i++){ const xx=x+2+i, yy=y+38-Math.round(Math.sin(i*0.4)*8)-i; R(xx,yy,2,6,mn); } }
+  // one white sock
+  if(p.feat===1){ R(x+4,y+34,4,6,coat); R(x+4,y+37,4,3,'#f0ece0'); R(x+4,y+39,4,1,'#181410'); }
+  // coat dapple
+  DITH(x+3,y+28,18,8,shade(coat,14),4);
+}
+
+// ============================================================
+//  SCENE ART (prerendered into bg canvas, 316x92)
+// ============================================================
+let BEAC=[];   // beacon positions pushed during prerender
+const SKYP=[
+  ['#0a0a24','#101034','#181440','#221a4c','#2e2050'],
+  ['#141034','#3a1a4c','#6c2a58','#a04850','#d07040','#eda454'],
+  ['#3a54a0','#5a74b8','#8ca0cc','#b8c8dc','#e0d8b8'],
+];
+function SKY(h){
+  const ph=skyPhase();
+  DGRAD_S(0,0,SC_W,h,SKYP[ph]);
+  if(ph===0){ for(let i=0;i<26;i++){ const x=(rr(i)*SC_W)|0,y=(rr(i+50)*h*0.7)|0; if(rr(i+99)>0.4) R(x,y,1,1,'#c8c8e8'); } }
+  if(ph===1){ PDISC(258,h-3,7,'#ffd870'); PDISC(258,h-3,10,'#ffb85040'); DITH(238,h-12,40,12,'#ffcf70',5); }
+  if(ph===2){ DITH(30,8,70,5,'#f0f0f0',7); DITH(180,16,90,6,'#f0f0f0',6); DITH(90,26,50,4,'#e8e8e8',5); }
+}
+function treeline(y,c){
+  for(let x=0;x<SC_W;x+=3){ const hh=5+((rr(x)*9)|0); R(x,y-hh,3,hh,c); }
+  R(0,y-2,SC_W,3,c);
+}
+function car(x,y,c,face){
+  R(x+1,y,16,5,c); R(x+3,y-4,11,4,c);
+  R(x+4,y-3,4,3,'#a8c8e0'); R(x+9,y-3,4,3,'#a8c8e0');
+  R(x+3,y+4,3,3,'#181818'); R(x+12,y+4,3,3,'#181818');
+  if(face==='front'){ R(x+2,y+1,2,2,'#ffe890'); R(x+14,y+1,2,2,'#ffe890');
+    DITH(x-7,y,7,4,'#ffe89060',6); DITH(x+18,y,7,4,'#ffe89060',6); }
+  else { R(x+2,y+1,2,2,'#e83828'); R(x+14,y+1,2,2,'#e83828'); }
+}
+function lorry(x,y,c,label){
+  R(x,y-10,26,14,c); R(x,y-10,26,2,shade(c,26)); R(x+26,y-4,9,8,'#3a4452');
+  R(x+28,y-3,5,4,'#a8c8e0');
+  R(x+4,y+4,4,4,'#181818'); R(x+14,y+4,4,4,'#181818'); R(x+28,y+4,4,4,'#181818');
+  if(label) TXT3(label,x+3,y-7,shade(c,-70));
+}
+function policeCar(x,y){
+  R(x+1,y,26,7,'#e8e8e8'); R(x+5,y-5,17,5,'#e8e8e8');
+  R(x+7,y-4,5,4,'#8fb8d8'); R(x+14,y-4,5,4,'#8fb8d8');
+  R(x+1,y+2,26,3,'#e86820'); // 2003 jam-sandwich stripe
+  TXT3('POLICE',x+3,y+1,'#28303a');
+  R(x+4,y+6,4,3,'#181818'); R(x+20,y+6,4,3,'#181818');
+  R(x+12,y-7,4,2,'#2838c8');
+  BEAC.push({x:x+13,y:y-7});
+}
+function ponySil(x,y,c,mane){
+  R(x,y,12,6,c); R(x+10,y-4,4,5,c); R(x+12,y-6,5,4,c);
+  R(x+1,y+5,2,4,c); R(x+4,y+5,2,4,c); R(x+7,y+5,2,4,c); R(x+10,y+5,2,4,c);
+  R(x-2,y,2,4,c);
+  if(mane){ R(x+9,y-6,3,3,mane); R(x+13,y-7,4,2,mane); R(x-3,y-1,2,4,mane); }
+}
+function personSil(x,y,c,hivis){
+  R(x+1,y,4,4,c); R(x,y+4,6,8,hivis?'#e8d820':c); R(x+1,y+12,2,5,c); R(x+4,y+12,2,5,c);
+}
+function gantry(cx,w,y,label){
+  R(cx-w/2,y,3,26,'#3a4048'); R(cx+w/2-3,y,3,26,'#3a4048');
+  R(cx-w/2,y,w,5,'#4a525c'); DITH(cx-w/2,y,w,5,'#2a3038',6);
+  const tw=t3w(label,1)+8;
+  R(cx-tw/2,y+5,tw,11,'#10141e'); R(cx-tw/2,y+5,tw,1,'#3a4048');
+  TXT3(label,cx-tw/2+4,y+8,'#cfe838');
+}
+function sceneField(){
+  SKY(40);
+  treeline(40,skyPhase()===0?'#0a1420':'#16281c');
+  DGRAD(0,40,SC_W,52,skyPhase()===0?['#1c3018','#182a14','#122010','#0e1a0c']:['#3a6428','#2f581f','#254818','#1c3a12']);
+  DITH(0,40,SC_W,7,'#c8ccd870',4); // ground mist
+  // farmhouse
+  R(258,26,44,18,'#5a4a3c'); PLINE(256,26,280,16,'#3a2c22',2); PLINE(280,16,304,26,'#3a2c22',2);
+  R(258,24,46,3,'#3a2c22'); R(286,30,8,8,'#ffd858'); R(289,30,1,8,'#5a4a3c'); R(286,33,8,1,'#5a4a3c');
+  R(266,32,7,12,'#33281e');
+  // fence with THE GAP
+  for(let i=0;i<11;i++){
+    const x=10+i*24;
+    if(i===5) continue; // missing post: the gap
+    R(x,56,3,16,'#4a3828'); R(x,56,3,2,'#6a5438');
+    if(i<10 && i!==4 && i!==5){ R(x+3,59,21,2,'#553f2c'); R(x+3,66,21,2,'#553f2c'); }
+  }
+  PLINE(120,60,136,70,'#553f2c',2); // dangling broken rail
+  R(118,70,20,2,'#2a2018');
+  // remaining herd, grazing, judging
+  ponySil(28,48,'#241c14'); ponySil(58,52,'#2c2218'); ponySil(88,47,'#241c14');
+  // sign
+  R(146,66,34,10,'#6a5438'); R(147,67,32,8,'#8a7048'); TXT3('DENHAM',150,68,'#3a2c1a');
+  R(160,76,3,8,'#4a3828');
+}
+function sceneLane(){
+  SKY(34);
+  // converging lane
+  for(let yy=34;yy<92;yy++){
+    const t=(yy-34)/58, cw=36+t*230;
+    R(Math.round(158-cw/2),yy,Math.round(cw),1,yy%3===0?'#3c4046':'#43474d');
+  }
+  for(let i=0;i<7;i++){ const t=i/7, yy=38+t*t*52, dw=1+t*4; R(157-dw/2,Math.round(yy),Math.round(dw),Math.max(1,Math.round(t*5)),'#c8c4a8'); }
+  // hedges
+  for(let yy=30;yy<92;yy++){
+    const t=(yy-30)/62, cw=36+((yy-34>0?yy-34:0)/58)*230;
+    const le=Math.round(158-cw/2), re=Math.round(158+cw/2);
+    R(0,yy,le,1,'#16301a'); R(re,yy,SC_W-re,1,'#16301a');
+  }
+  for(let x=0;x<SC_W;x+=4){ const hh=3+((rr(x+7)*6)|0); const t=Math.abs(x-158)/158;
+    if(x<100||x>216){ R(x,26+((rr(x)*8)|0),4,hh,'#1c3a20'); } }
+  DITH(0,30,100,62,'#2a5230',5); DITH(216,30,100,62,'#2a5230',5);
+  // cottage
+  R(20,16,40,16,'#8a7458'); PLINE(18,16,40,7,'#4a3828',2); PLINE(40,7,62,16,'#4a3828',2);
+  R(30,20,7,7,'#ffd858'); R(48,12,5,8,'#5a4838');
+  // milk float
+  R(196,52,40,16,'#e8e8e4'); R(196,46,16,8,'#e8e8e4'); R(199,48,9,5,'#9fc4dc');
+  R(214,54,20,8,'#c8c8c0');
+  for(let i=0;i<3;i++){ R(216+i*6,50,5,4,'#e08830'); R(217+i*6,51,3,2,'#f8f8f8'); }
+  TXT3('MILK',216,63,'#38487a');
+  R(200,66,5,5,'#181818'); R(226,66,5,5,'#181818');
+  // postbox
+  R(84,52,8,16,'#b02020'); R(83,50,10,3,'#8a1414'); R(85,55,6,2,'#2a0808');
+}
+function sceneSlip(){
+  SKY(30);
+  // M4 viaduct on the horizon
+  R(0,24,SC_W,6,'#242c36'); for(let x=8;x<SC_W;x+=28) R(x,26,14,4,skyPhase()===0?'#12141e':'#3a4450');
+  // embankment
+  for(let yy=30;yy<92;yy++){ const t=(yy-30)/62; R(Math.round(SC_W-40-t*130),yy,Math.round(40+t*130),1,'#2a4a1e'); }
+  DITH(200,40,116,52,'#3a6428',5);
+  // slip road sweeping down-left
+  for(let yy=30;yy<92;yy++){
+    const t=(yy-30)/62, cxx=200-t*110, cw=20+t*150;
+    R(Math.round(cxx-cw/2),yy,Math.round(cw),1,yy%3===0?'#3c4046':'#43474d');
+  }
+  // big blue interchange sign
+  R(18,16,96,38,'#1c3f8c'); R(18,16,96,2,'#e8e8e8'); R(18,52,96,2,'#e8e8e8');
+  R(18,16,2,38,'#e8e8e8'); R(112,16,2,38,'#e8e8e8');
+  TXT3('M25',26,21,'#f0f0f0',2);
+  TXT3('M4 THE SOUTH',26,36,'#f0f0f0');
+  PLINE(88,24,100,32,'#f0f0f0',2); PLINE(100,32,94,32,'#f0f0f0',2); PLINE(100,32,100,26,'#f0f0f0',2);
+  R(30,54,4,22,'#4a525c'); R(94,54,4,22,'#4a525c');
+  // Keith's beautiful violated taper
+  for(let i=0;i<6;i++){ const x=150-i*16, y=62+i*4;
+    R(x,y,6,3,'#e07818'); R(x+1,y-3,4,3,'#e07818'); R(x+1,y-1,4,1,'#f8f8f8'); }
+  policeCar(210,74);
+}
+function sceneCarr(){
+  SKY(24);
+  gantry(160,300,2,'PONY IN ROAD');
+  // carriageway
+  DGRAD(0,30,SC_W,62,['#4a4e54','#44484e','#3e4248','#383c42']);
+  R(0,30,SC_W,2,'#2a2e34');
+  // lane lines
+  for(let x=0;x<SC_W;x+=22){ R(x,50,12,2,'#c8c4a8'); R(x+8,70,12,2,'#c8c4a8'); }
+  R(0,34,SC_W,2,'#c8b048'); // hard shoulder line
+  R(0,88,SC_W,4,'#5a6068'); R(0,88,SC_W,1,'#8a929c'); // barrier base
+  // the tailback (facing us: this is the southbound, they are stopped)
+  const cs=['#8a2430','#2a5a8a','#7a7a20','#3a6a3a','#6a3a8a','#8a5a24','#33636a'];
+  for(let i=0;i<7;i++) car(8+i*44,60,cs[i],'front');
+  for(let i=0;i<6;i++) car(30+i*48,42,cs[(i+3)%7],'front');
+  lorry(196,52,'#c8c8c8','PEAS');
+  DITH(0,38,SC_W,4,'#98a0b040',4); // exhaust haze
+}
+function sceneResv(){
+  SKY(22);
+  // far (northbound) carriageway: taillights crawling away
+  DGRAD(0,22,SC_W,26,['#3e4248','#383c42']);
+  for(let i=0;i<8;i++) car(4+i*40,36,'#4a4e54','back');
+  // central reservation barrier
+  R(0,48,SC_W,3,'#8a929c'); R(0,53,SC_W,3,'#8a929c');
+  for(let x=6;x<SC_W;x+=24) R(x,48,3,10,'#6a727c');
+  DGRAD(0,58,SC_W,34,['#44484e','#3e4248','#383c42']);
+  for(let x=0;x<SC_W;x+=22) R(x+4,74,12,2,'#c8c4a8');
+  // near queue
+  const cs=['#2a5a8a','#8a2430','#3a6a3a','#7a7a20','#6a3a8a'];
+  for(let i=0;i<5;i++) car(14+i*52,80,cs[i],'front');
+  // gantry J16
+  gantry(268,80,2,'J16 M40');
+  // the arrest party
+  policeCar(6,70); policeCar(250,70);
+  personSil(60,42,'#28303a',1); personSil(92,40,'#28303a',1);
+  personSil(200,41,'#28303a',1); personSil(226,43,'#3a3028',0);
+  // onlookers on the far bank
+  personSil(150,28,'#3a3040',0); personSil(160,29,'#403030',0);
+}
+function sceneSvc(){
+  SKY(34);
+  // services sign
+  R(24,10,6,44,'#4a525c'); R(12,6,64,16,'#1c3f8c'); R(12,6,64,1,'#e8e8e8'); R(12,21,64,1,'#e8e8e8');
+  TXT3('SERVICES',16,11,'#f0f0f0');
+  // forecourt
+  DGRAD(0,34,SC_W,58,['#4a4e54','#42464c','#3a3e44']);
+  // canopy
+  R(120,26,150,8,'#d8d8d0'); R(120,32,150,4,'#c03030');
+  R(130,36,5,30,'#8a8a84'); R(250,36,5,30,'#8a8a84');
+  R(150,48,12,20,'#c8352d'); R(152,50,8,6,'#2a2a2a'); // pump
+  R(190,48,12,20,'#c8352d'); R(192,50,8,6,'#2a2a2a');
+  car(60,74,'#3a6a3a','back');
+  R(290,56,10,14,'#3a4048'); R(292,54,6,3,'#4a525c'); // bin
+}
+function sceneAir(){
+  SKY(40);
+  // control tower
+  R(40,18,8,34,'#8a929c'); R(32,10,24,12,'#b8c4cc'); R(34,12,20,6,'#ffd858');
+  // plane tail
+  PLINE(250,52,282,10,'#d8d8e0',8); R(258,36,30,10,'#d8d8e0');
+  R(270,14,14,10,'#c03030');
+  // runway
+  DGRAD(0,52,SC_W,40,['#3a3e44','#34383e','#2e3238']);
+  for(let x=0;x<SC_W;x+=26) R(x,68,14,3,'#c8c4a8');
+  for(let x=6;x<SC_W;x+=16) R(x,88,3,2,(x/16)%2?'#e8e858':'#e85858');
+  R(120,44,26,8,'#1c3f8c'); TXT3('LHR',126,46,'#f0f0f0');
+  R(130,52,3,10,'#4a525c');
+}
+function sceneTown(){
+  SKY(26);
+  DGRAD(0,64,SC_W,28,['#3c4046','#34383e']);
+  // shop row
+  for(let i=0;i<4;i++){
+    const x=8+i*78, cols=['#7a5a48','#5a6a7a','#6a5a7a','#5a7a5a'];
+    R(x,26,72,38,cols[i]); R(x,26,72,2,shade(cols[i],24));
+    R(x+6,40,26,18,i===1?'#ffd858':'#28303c'); R(x+40,40,24,18,'#28303c');
+    R(x+6,58,60,6,'#2a2420');
+    // awning
+    for(let a=0;a<9;a++) R(x+4+a*8,32,8,6,a%2?'#c8c0a8':'#a83838');
+  }
+  TXT3('TEA ROOMS',94,60,'#e8dfc0');
+  // postbox + the cat on the bin
+  R(28,68,8,16,'#b02020'); R(27,66,10,3,'#8a1414');
+  R(270,70,14,16,'#3a4048');
+  R(274,62,10,8,'#181818'); R(274,60,3,3,'#181818'); R(281,60,3,3,'#181818');
+  R(276,65,1,1,'#68e868'); R(280,65,1,1,'#68e868');
+  R(283,66,6,2,'#181818');
+}
+function sceneOffice(){
+  DGRAD(0,0,SC_W,SC_H,['#2e3652','#2a3048','#242a40']);
+  // window with the dawn outside
+  R(216,8,84,52,'#10141e');
+  const keep=cx_;
+  R(220,12,76,44,'#0a0a24');
+  // mini-sky through panes
+  for(let py=0;py<2;py++) for(let px=0;px<2;px++){
+    DGRAD(221+px*39,13+py*22,36,20,py===0?['#141034','#2a1644']:['#58255a','#8c3a58']);
+  }
+  for(let i=0;i<8;i++) R(224+((rr(i+30)*66)|0),15+((rr(i)*16)|0),1,1,'#c8c8e8');
+  R(256,12,4,44,'#3a4468'); R(220,33,76,3,'#3a4468');
+  R(216,8,84,3,'#4a5480'); R(216,57,84,3,'#4a5480'); R(216,8,3,52,'#4a5480'); R(297,8,3,52,'#4a5480');
+  // corkboard: 8 suspects, red string
+  R(14,8,116,52,'#5a4632'); R(16,10,112,48,'#8a6c42');
+  for(let i=0;i<8;i++){
+    const x=22+(i%4)*27, y=14+((i/4)|0)*22;
+    R(x-1,y-1,18,18,'#e8e4d8'); R(x,y,16,14,PONIES[i].coat);
+    R(x+10,y+2,5,5,MANEC[PONIES[i].mane]);
+    R(x+7,y-2,2,2,'#c83030');
+  }
+  PLINE(30,20,102,40,'#c8303080'); PLINE(102,20,48,44,'#c8303080'); PLINE(56,42,96,18,'#c8303080');
+  TXT3('SUSPECTS',48,50,'#3a2c1a');
+  // desk
+  DGRAD(0,64,SC_W,28,['#6a4c2e','#5a3f24','#4a331c']);
+  R(0,64,SC_W,2,'#8a6840');
+  // phone, mug, papers, lamp
+  R(36,70,26,10,'#2a2a32'); R(38,66,22,5,'#3a3a44'); R(44,72,10,4,'#181820');
+  R(96,70,12,10,'#c8352d'); R(107,72,4,5,'#c8352d'); DITH(97,62,8,8,'#e8e8e860',4);
+  R(150,68,44,3,'#e8e4d8'); R(154,71,40,3,'#d8d4c0'); R(150,74,44,3,'#e8e4d8');
+  R(250,52,5,16,'#2a2e3a'); R(238,46,28,8,'#2e4a2e'); DITH(234,54,36,12,'#ffd85830',6);
+  // crest
+  R(150,20,44,30,'#1c2440'); R(152,22,40,26,'#24305a');
+  ponySil(162,36,'#d8b048',0); TXT3('E I B',158,25,'#d8b048');
+}
+const SCENEFN={field:sceneField,lane:sceneLane,slip:sceneSlip,carr:sceneCarr,resv:sceneResv,svc:sceneSvc,air:sceneAir,town:sceneTown,office:sceneOffice};
+function ensureBG(id){
+  const key=id+'_'+skyPhase();
+  if(G.bgKey===key) return;
+  BEAC=[];
+  cx_=bgctx;
+  R(0,0,SC_W,SC_H,'#000');
+  SCENEFN[id]();
+  cx_=fctx;
+  G.bgKey=key;
+}
+
+// ============================================================
+//  UI CHROME
+// ============================================================
+let HITS=[];
+function hit(x,y,w,h,fn){ HITS.push({x,y,w,h,fn}); }
+function hov(x,y,w,h){ return G.mx>=x&&G.mx<x+w&&G.my>=y&&G.my<y+h; }
+function BTN(x,y,w,h,label,fn,o){
+  o=o||{};
+  const hv=hov(x,y,w,h)&&!o.dis;
+  let base=hv?'#3c4e88':'#2a3868', lit='#5a6aa8', drk='#141c40', txt='#f0e8d0';
+  if(o.red){ base=hv?'#c23a34':'#a02828'; lit='#e06858'; drk='#601414'; }
+  if(o.dis){ base='#22283a'; lit='#2e3448'; drk='#141828'; txt='#5a6070'; }
+  if(o.flash && (tick>>4)&1 && !hv){ base=o.red?'#c23a34':'#3c4e88'; }
+  R(x,y,w,h,base);
+  R(x,y,w,1,lit); R(x,y,1,h,lit); R(x,y+h-1,w,1,drk); R(x+w-1,y,1,h,drk);
+  const s=o.s||1;
+  if(o.sub){
+    TXT(label,x+w/2,y+4,txt,'center',s);
+    TXT(o.sub,x+w/2,y+h-10,'#8a94b8','center');
+  } else {
+    TXT(label,x+w/2,y+Math.floor((h-7*s)/2)+1,txt,'center',s);
+  }
+  if(!o.dis) hit(x,y,w,h,fn);
+}
+function PANEL(x,y,w,h){
+  R(x,y,w,h,'#141a38');
+  R(x,y,w,1,'#4a5a90'); R(x,y,1,h,'#4a5a90');
+  R(x,y+h-1,w,1,'#0c1028'); R(x+w-1,y,1,h,'#0c1028');
+  R(x+1,y+1,w-2,1,'#0c1028'); R(x+1,y+1,1,h-2,'#0c1028');
+}
+function topBar(title){
+  R(0,0,W,12,'#0c1226');
+  R(0,11,W,1,'#d8b048');
+  TXT('EIB',3,3,'#d8b048');
+  TXT(title,W/2,3,'#aab4d8','center');
+  TXT(clockStr(G.mins),W-3,3,G.mins>=75?'#ff5848':'#ffd858','right');
+}
+function marquee(){
+  const t='+ TVP PRESS OFFICE + '+pressLine(G.mins).replace('PAUL ANTHEM: ','');
+  R(SC_X,SC_Y+SC_H-9,SC_W,9,'#101020');
+  R(SC_X,SC_Y+SC_H-9,SC_W,1,'#2a3050');
+  G.tickerX-=0.55;
+  const tw=textW(t);
+  if(G.tickerX<-tw) G.tickerX=SC_W;
+  // clip by drawing then repainting side borders
+  TXT(t,SC_X+G.tickerX,SC_Y+SC_H-8,'#8fd8ff');
+  R(0,SC_Y+SC_H-9,SC_X,9,'#000'); R(SC_X+SC_W,SC_Y+SC_H-9,W-SC_X-SC_W,9,'#000');
+}
+function sceneFrame(id){
+  ensureBG(id);
+  fctx.drawImage(bg,SC_X,SC_Y);
+  R(SC_X-1,SC_Y-1,SC_W+2,1,'#4a5a90'); R(SC_X-1,SC_Y+SC_H,SC_W+2,1,'#0c1028');
+  R(SC_X-1,SC_Y-1,1,SC_H+2,'#4a5a90'); R(SC_X+SC_W,SC_Y-1,1,SC_H+2,'#0c1028');
+  // beacons
+  for(const b of BEAC){
+    if((tick>>3)&1){ R(SC_X+b.x,SC_Y+b.y,2,2,'#4a6aff'); DITH(SC_X+b.x-4,SC_Y+b.y-3,10,7,'#4a6aff50',5); }
+    else R(SC_X+b.x,SC_Y+b.y,2,2,'#1a2a80');
+  }
+}
+// the fugitive, drawn live (bobbing) on motorway scenes
+function livePony(){
+  const c=PONIES[G.culprit];
+  if(G.trail[G.loc].id==='carr'){
+    const bob=Math.round(Math.sin(tick*0.15));
+    ponySil(SC_X+120+Math.round(Math.sin(tick*0.02)*6),SC_Y+52+bob,'#3a2c20',MANEC[c.mane]);
+    if((tick>>5)%3===0) DITH(SC_X+112,SC_Y+56,8,4,'#a8a09060',5);
+  }
+  if(G.trail[G.loc].id==='resv'){
+    const munch=((tick>>4)&1);
+    const px=SC_X+150, py=SC_Y+44;
+    R(px,py,16,8,c.coat); R(px+13,py-5+(munch?3:0),5,6,c.coat); R(px+16,py-7+(munch?3:0),5,4,c.coat);
+    R(px+1,py+7,2,5,c.coat); R(px+5,py+7,2,5,c.coat); R(px+9,py+7,2,5,c.coat); R(px+13,py+7,2,5,c.coat);
+    R(px+12,py-7+(munch?3:0),3,3,MANEC[c.mane]); R(px-3,py-1,3,5,MANEC[c.mane]);
+  }
+}
+
+// ============================================================
+//  MODE RENDERERS
+// ============================================================
+function drawTitle(){
+  DGRAD_S(0,0,W,H,['#060614','#0a0e2c','#101848','#182258']);
+  for(let i=0;i<40;i++){ const x=(rr(i)*W)|0,y=(rr(i+80)*110)|0; if(rr(i+7)>0.35) R(x,y,1,1,'#b8b8e0'); }
+  // carmen band
+  DGRAD(0,118,W,54,['#8a1c20','#a02428','#8a1c20','#701418']);
+  R(0,116,W,2,'#d8b048'); R(0,172,W,2,'#d8b048');
+  // motorway stripe across the band
+  R(0,142,W,10,'#2a2e36'); for(let x=0;x<W;x+=18) R(x,146,9,2,'#e8e4c8');
+  // the suspect, at large, in a fedora
+  const px=236,py=132;
+  R(px,py,30,14,'#181818'); R(px+26,py-8,8,10,'#181818'); R(px+30,py-12,10,7,'#181818');
+  R(px+2,py+13,4,9,'#181818'); R(px+9,py+13,4,9,'#181818');
+  R(px+17,py+13,4,9,'#181818'); R(px+24,py+13,4,9,'#181818');
+  R(px-5,py-2,4,8,'#181818');
+  // fedora
+  R(px+26,py-16,18,3,'#3a2c18'); R(px+30,py-21,10,6,'#4a3a20'); R(px+30,py-17,10,2,'#181008');
+  R(px+37,py-9,2,2,'#e8d8b0'); // shifty eye
+  TXT('WHERE ON THE M25 IS',W/2,26,'#f0e8d0','center',2);
+  TXT('THE SHETLAND PONY?',W/2,44,'#ffd858','center',2);
+  R(70,62,180,1,'#d8b048');
+  TXT('AN EQUINE INCIDENT BUREAU CASE FILE',W/2,68,'#8a94b8','center');
+  TXT('BASED ON A TRUE STORY',W/2,80,'#aab4d8','center');
+  TXT('10 OCTOBER 2003',W/2,90,'#aab4d8','center');
+  if((tick>>5)&1) OTXT('CLICK TO OPEN THE CASE',W/2,124,'#fff','center');
+  TXT('MORE TEXT. NO WALKING. ONE PONY.',W/2,180,'#5a6490','center');
+  hit(0,0,W,H,()=>{ sfxClick(); G.mode='brief'; G.pages=startPages(BRIEF_PAGES.map(t=>({t}))); G.page=0;
+    G.pagePortrait=P_PAUL; G.pageName='PAUL ANTHEM'; G.pageJob='TVP Press Office';
+    G.pageDone=()=>{ G.mode='scene'; setMsg(G.trail[0].ambient); }; });
+}
+function drawTextPanel(){
+  PANEL(2,106,316,62);
+}
+// split raw pages into 3-line screens so text never collides with the button
+function startPages(raw){
+  const out=[];
+  for(const p of raw){
+    const lines=wrapText(p.t,42);
+    for(let i=0;i<lines.length;i+=3) out.push({lines:lines.slice(i,i+3),clue:p.clue||null});
+  }
+  return out;
+}
+function drawPages(){
+  drawTextPanel();
+  const p=G.pages[G.page];
+  const tx=60;
+  PANEL(6,110,48,48);
+  if(G.pageP) drawPonyP(10,114,G.pageP); else drawFace(10,114,G.pagePortrait||P_PAUL);
+  if(G.pageName){
+    TXT(G.pageName,tx,111,'#ffd858');
+    TXT(' - '+G.pageJob,tx+textW(G.pageName),111,'#8a94b8');
+  }
+  const col=p.clue?'#ffd858':'#d8dce8';
+  for(let i=0;i<p.lines.length;i++) TXT(p.lines[i],tx,122+i*9,col);
+  if(p.clue) TXT('* NOTED IN CASEBOOK *',tx,151,'#68d868');
+  const last=G.page>=G.pages.length-1;
+  const adv=()=>{
+    sfxPage();
+    if(last){ const d=G.pageDone; G.pageDone=null; G.pageP=null; G.pagePortrait=null; G.pageName=''; if(d) d(); }
+    else { G.page++; noteClue(G.pages[G.page]); }
+  };
+  hit(2,106,316,62,adv);
+  BTN(258,148,54,16,last?'DONE':'MORE',adv);
+}
+function noteClue(p){
+  if(!p||!p.clue) return;
+  const k=JSON.stringify(p.clue);
+  if(G.seenClue[k]) return;
+  G.seenClue[k]=1;
+  sfxClue();
+  if(p.clue.type==='route'){ G.routeKnown.push(p.clue.loc); }
+  else { const c=CATS[p.clue.cat]; G.traits[c.key]=PONIES[G.culprit][c.key]; }
+}
+function drawBrief(){
+  topBar('CASE NO. 251003 - BRIEFING');
+  sceneFrame('office');
+  marquee();
+  drawPages();
+  drawButtons(true);
+}
+function drawButtons(dis){
+  const last=G.loc===4;
+  BTN(2,171,78,26,'QUESTION',()=>{ sfxClick(); G.mode='pick'; },{dis});
+  if(last) BTN(82,171,78,26,'CORNER IT',()=>{ sfxClick(); tryCapture(); },{red:1,flash:1,dis});
+  else BTN(82,171,78,26,'TRAVEL',()=>{ sfxClick(); G.mode='travel'; },{dis});
+  BTN(162,171,78,26,'PONY-DEX',()=>{ sfxClick(); G.dexSel=-1; G.mode='dex'; },{dis});
+  BTN(242,171,76,26,'CASEBOOK',()=>{ sfxClick(); G.mode='notes'; },{dis});
+}
+function drawScene(){
+  const L=G.trail[G.loc];
+  topBar(L.short);
+  sceneFrame(L.id);
+  livePony();
+  marquee();
+  drawTextPanel();
+  if(G.msg) for(let i=0;i<G.msg.length&&i<6;i++) TXT(G.msg[i],8,113+i*9,'#d8dce8');
+  drawButtons(false);
+}
+function drawPick(){
+  const L=G.trail[G.loc];
+  topBar(L.short);
+  sceneFrame(L.id);
+  livePony();
+  marquee();
+  drawTextPanel();
+  TXT('QUESTION WHO? (2 MIN)',8,110,'#ffd858');
+  L.witnesses.forEach((w,i)=>{
+    const done=G.talked[G.loc+':'+i];
+    BTN(8,120+i*15,230,14,(done?'* ':'')+w.name+' - '+w.job,()=>{
+      sfxClick();
+      addMins(done?1:2);
+      if(G.mode==='end') return;
+      if(!done) G.interviews++;
+      G.talked[G.loc+':'+i]=1;
+      G.pages=startPages(w.pages); G.page=0;
+      G.pagePortrait=w.p; G.pageP=w.ponyP||null;
+      G.pageName=w.name; G.pageJob=w.job;
+      noteClue(w.pages[0]);
+      G.pageDone=()=>{ G.mode='scene'; setMsg(L.ambient); };
+      G.mode='talk';
+    });
+  });
+  BTN(252,120,60,14,'CANCEL',()=>{ sfxClick(); G.mode='scene'; });
+  drawButtons(true);
+}
+function drawTalk(){
+  const L=G.trail[G.loc];
+  topBar(L.short);
+  sceneFrame(L.id);
+  livePony();
+  marquee();
+  drawPages();
+  drawButtons(true);
+}
+function drawTravel(){
+  const L=G.trail[G.loc];
+  topBar('TRAVEL');
+  PANEL(2,13,316,184-13+14);
+  TXT('WHERE TO, DETECTIVE?',W/2,22,'#ffd858','center');
+  TXT('The Vauxhall Astra awaits. Each trip: 5 minutes.',W/2,34,'#8a94b8','center');
+  L.opts.forEach((o,i)=>{
+    BTN(12,48+i*28,296,24,o.n,()=>{
+      sfxTravel();
+      addMins(5);
+      if(G.mode==='end') return;
+      if(o.decoy){ G.wrongTurns++; G.decoy=o; G.bgKey=''; G.mode='decoy'; }
+      else {
+        G.loc=o.next; G.bgKey='';
+        setTrack(G.loc>=2?'tense':'case_');
+        setMsg(G.trail[G.loc].ambient);
+        G.mode='scene';
+      }
+    },{sub:o.b});
+  });
+  BTN(12,166,296,18,'STAY PUT',()=>{ sfxClick(); G.mode='scene'; });
+}
+function drawDecoy(){
+  const d=G.decoy;
+  topBar(d.n);
+  sceneFrame(d.scene);
+  marquee();
+  drawTextPanel();
+  const lines=wrapText(d.txt,51);
+  for(let i=0;i<lines.length&&i<5;i++) TXT(lines[i],8,113+i*9,'#d8dce8');
+  TXT('This was a dead end.',8,113+Math.min(lines.length,5)*9,'#e07868');
+  BTN(2,171,316,26,'HEAD BACK (5 MIN)',()=>{
+    sfxTravel(); addMins(5);
+    if(G.mode==='end') return;
+    G.bgKey=''; setMsg(G.trail[G.loc].ambient); G.mode='scene';
+  });
+}
+function dexMatches(){
+  return PONIES.map((p,i)=>i).filter(i=>{
+    const p=PONIES[i];
+    for(const c of CATS){ const sel=G.dexPick[c.key]; if(sel!==null && p[c.key]!==sel) return false; }
+    return true;
+  });
+}
+function drawDex(){
+  if(!G.dexPick) G.dexPick={mane:null,height:null,temper:null,feat:null};
+  topBar('PONY-DEX 2000');
+  R(0,12,W,188,'#0e1430');
+  TXT('EQUINE SUSPECT DATABASE',6,16,'#68d8d8');
+  R(6,25,110,1,'#2a3868');
+  CATS.forEach((c,i)=>{
+    const y=30+i*26, sel=G.dexPick[c.key];
+    TXT(c.label,6,y,'#8a94b8');
+    BTN(6,y+8,110,14,sel===null?'- ANY -':c.vals[sel],()=>{
+      sfxClick();
+      G.dexPick[c.key]=sel===null?0:(sel+1>=c.vals.length?null:sel+1);
+      G.dexSel=-1;
+    });
+  });
+  const m=dexMatches();
+  TXT('MATCHES: '+m.length,6,138,m.length===1?'#68d868':'#d8dce8');
+  if(G.warrant!==null){
+    TXT('WARRANT ISSUED:',6,150,'#ffd858');
+    TXT(PONIES[G.warrant].name,6,159,'#ff8858');
+  } else {
+    TXT('NO WARRANT ISSUED',6,150,'#5a6490');
+  }
+  BTN(6,172,110,20,'BACK',()=>{ sfxClick(); G.dexSel=-1; G.mode='scene'; });
+  // suspect grid 4x2
+  PONIES.forEach((p,i)=>{
+    const gx=126+(i%4)*48, gy=26+((i/4)|0)*66;
+    const active=m.includes(i);
+    PANEL(gx,gy,46,62);
+    drawPonyP(gx+3,gy+3,p);
+    TXT(p.name,gx+23,gy+46,active?'#f0e8d0':'#5a6490','center');
+    if(G.warrant===i){
+      TXT('WARRANT',gx+23,gy+54,'#ff5848','center');
+      R(gx,gy,46,1,'#ff5848'); R(gx,gy+61,46,1,'#ff5848'); R(gx,gy,1,62,'#ff5848'); R(gx+45,gy,1,62,'#ff5848');
+    }
+    if(!active){ DITH(gx+1,gy+1,44,60,'#0e1430',12); }
+    else if(G.dexSel===i){ R(gx,gy,46,1,'#ffd858'); R(gx,gy+61,46,1,'#ffd858'); R(gx,gy,1,62,'#ffd858'); R(gx+45,gy,1,62,'#ffd858'); }
+    if(active) hit(gx,gy,46,62,()=>{ sfxClick(); G.dexSel=(G.dexSel===i?-1:i); });
+  });
+  if(G.dexSel>=0){
+    R(126,164,192,30,'#1c2444');
+    R(126,164,192,1,'#4a5a90');
+    TXT('ISSUE WARRANT FOR '+PONIES[G.dexSel].name+'?',222,168,'#ffd858','center');
+    BTN(150,178,64,14,'ISSUE (1 MIN)',()=>{
+      sfxStamp(); G.warrant=G.dexSel; G.dexSel=-1; addMins(1);
+    });
+    BTN(224,178,64,14,'HOLD ON',()=>{ sfxClick(); G.dexSel=-1; });
+  } else if(m.length>1){
+    TXT('Select traits to narrow the herd,',222,170,'#5a6490','center');
+    TXT('then click a suspect.',222,179,'#5a6490','center');
+  } else if(m.length===1 && G.warrant===null){
+    TXT('One match. Click the suspect',222,170,'#68d868','center');
+    TXT('to issue a warrant.',222,179,'#68d868','center');
+  }
+}
+function drawNotes(){
+  topBar('CASEBOOK');
+  R(0,12,W,188,'#141228');
+  // paper
+  R(10,18,300,150,'#e8e4d0'); R(10,18,300,3,'#c8303080');
+  for(let y=34;y<160;y+=9) R(16,y,288,1,'#c8c4b040');
+  TXT('CASE NO. 251003 - THE M25 PONY',16,22,'#3a3020');
+  TXT('THE TRAIL:',16,36,'#8a2430');
+  if(G.routeKnown.length===0) TXT('(no route clues yet)',80,36,'#8a8470');
+  G.routeKnown.forEach((li,i)=>TXT('- '+ROUTESHORT[li],22,45+i*9,'#3a3020'));
+  const ty=45+Math.max(1,G.routeKnown.length)*9+4;
+  TXT('THE SUSPECT:',16,ty,'#8a2430');
+  CATS.forEach((c,i)=>{
+    const v=G.traits[c.key];
+    TXT(c.label+':',22,ty+9+i*9,'#3a3020');
+    TXT(v===null?'?':c.vals[v],100,ty+9+i*9,v===null?'#8a8470':'#1c5a1c');
+  });
+  const sy=ty+9+4*9+4;
+  TXT('WARRANT: '+(G.warrant===null?'NONE':PONIES[G.warrant].name),16,sy,G.warrant===null?'#8a8470':'#8a2430');
+  TXT('WRONG TURNS: '+G.wrongTurns+'   INTERVIEWS: '+G.interviews,16,sy+9,'#3a3020');
+  TXT('ROAD CLOSED 06:50. CATCH IT BEFORE 08:00.',16,sy+18,'#8a2430');
+  BTN(110,174,100,20,'BACK',()=>{ sfxClick(); G.mode='scene'; });
+}
+function tryCapture(){
+  if(G.warrant===null){
+    addMins(3);
+    if(G.mode==='end') return;
+    setMsg("PC HUGHES: 'Whoa, whoa. Warrant first. It has RIGHTS. This is not the Wild West - it is Buckinghamshire.' (+3 min)");
+    sfxWrong();
+    return;
+  }
+  addMins(4);
+  if(G.mode==='end') return;
+  const right=G.warrant===G.culprit;
+  const wn=PONIES[G.warrant].name, cn=PONIES[G.culprit].name;
+  G.pagePortrait=P_HUGHES; G.pageP=null; G.pageName='PC HUGHES'; G.pageJob='Officer at scene';
+  if(right){
+    G.caughtAt=G.mins;
+    G.pages=startPages([
+      {t:"You raise the warrant. PC Hughes nods the slow nod of a man who has waited his whole career for this exact paperwork."},
+      {t:"Four officers and several members of the public advance in a respectful semicircle. The pony considers its options. It has none. It is, at last, gently apprehended."},
+      {t:"It is - as your warrant correctly states - "+cn+". "+cn+" seems excited rather than distressed. Somewhere behind you, Paul Anthem is already composing."},
+    ]);
+    G.pageDone=()=>endGame('win');
+  } else {
+    G.pages=startPages([
+      {t:"You raise the warrant. PC Hughes nods. The semicircle advances. The pony is apprehended, checked against the warrant..."},
+      {t:"...and released with a formal apology. That is NOT "+wn+". "+wn+" has been in a field at Iver Heath all morning, with witnesses. Forty of them."},
+      {t:"In the confusion, the actual culprit performs what one officer will later describe as 'a scarpering' and vanishes towards Junction 16, into legend."},
+    ]);
+    G.pageDone=()=>endGame('wrong');
+  }
+  G.page=0; G.mode='capture';
+}
+function drawCapture(){
+  topBar('THE ARREST');
+  sceneFrame('resv');
+  livePony();
+  marquee();
+  drawPages();
+  drawButtons(true);
+}
+function drawEnd(){
+  if(G.endKind==='win') return drawWin();
+  R(0,0,W,H,G.endKind==='wrong'?'#141228':'#200a0a');
+  if(G.endKind==='gridlock'){
+    ensureBG('carr'); fctx.drawImage(bg,SC_X,20);
+    DITH(SC_X,20,SC_W,SC_H,'#600000',9);
+    TXT('08:00. GRIDLOCK.',W/2,124,'#ff5848','center',2);
+    const l=wrapText("The M25 is now, technically, a car park. The largest in Europe. Paul Anthem calls it 'a bold experiment in stillness'. The pony was last seen heading for the M40, at large and at ease.",48);
+    l.forEach((t,i)=>TXT(t,W/2,144+i*9,'#d8b0a8','center'));
+  } else {
+    const p=PONIES[G.warrant];
+    PANEL(120,24,80,80);
+    drawPonyP(140,34,p);
+    TXT(p.name,W/2,82,'#f0e8d0','center');
+    TXT('RELEASED WITHOUT CHARGE',W/2,92,'#ff5848','center');
+    TXT('CASE UNSOLVED',W/2,114,'#ff5848','center',2);
+    const l=wrapText("The real culprit is still out there. Occasionally, on quiet mornings, junction cameras catch something small and hairy moving with great purpose. The file remains open.",48);
+    l.forEach((t,i)=>TXT(t,W/2,134+i*9,'#b8b0d0','center'));
+  }
+  TXT('FINAL RANK: TRAFFIC CONE (HONORARY)',W/2,168,'#d8b048','center');
+  BTN(100,180,120,16,'REOPEN THE CASE',()=>{ sfxClick(); newGame(); setTrack('case_'); });
+}
+function drawWin(){
+  // Horse & Hound front page
+  R(0,0,W,H,'#181420');
+  R(8,4,304,190,'#ece8da');
+  R(8,4,304,1,'#b8b4a0'); R(8,193,304,1,'#b8b4a0');
+  TXT('HORSE & HOUND',W/2,10,'#1a1610','center',2);
+  R(16,26,288,1,'#1a1610'); R(16,28,288,1,'#1a1610');
+  TXT('SATURDAY 11 OCTOBER 2003',20,31,'#5a5648');
+  TXT('ONE SHILLING (90p)',300,31,'#5a5648','right');
+  R(16,40,288,1,'#8a8674');
+  TXT('LOOSE SHETLAND CLOSES M25',W/2,46,'#1a1610','center',2);
+  TXT("'EXCITED, NOT DISTRESSED'",W/2,62,'#8a2430','center');
+  // photo
+  PANEL(216,74,84,72);
+  drawPonyP(238,80,PONIES[G.culprit]);
+  TXT(PONIES[G.culprit].name,258,124,'#d8dce8','center');
+  TXT('IN CUSTODY',258,133,'#d8dce8','center');
+  TXT3('ESCORTED NOT LED',227,150,'#8a8470');
+  // column filler
+  for(let col=0;col<2;col++){
+    const cx0=20+col*98;
+    for(let i=0;i<9;i++) R(cx0,76+i*7,84-((rr(col*20+i)*30)|0),3,'#a8a494');
+  }
+  // stats box
+  R(20,142,180,42,'#dcd8c6'); R(20,142,180,1,'#8a8674'); R(20,183,180,1,'#8a8674');
+  TXT('CAUGHT: '+clockStr(G.caughtAt)+'   REOPENED: '+clockStr(Math.min(90,G.caughtAt+22)),24,146,'#3a3020');
+  TXT('INTERVIEWS: '+G.interviews+'   WRONG TURNS: '+G.wrongTurns,24,155,'#3a3020');
+  TXT('RANK EARNED:',24,164,'#3a3020');
+  TXT(rankFor(G.caughtAt),24,173,'#8a2430');
+  BTN(216,158,88,18,'NEW CASE',()=>{ sfxClick(); newGame(); setTrack('case_'); });
+  if(G.caughtAt<=45) TXT('A RECORD!',258,178,'#8a2430','center');
+  else TXT('The real police took 45 min.',258,180,'#8a8470','center');
+}
+
+// ============================================================
+//  INPUT + MAIN LOOP
+// ============================================================
+function mapXY(e){
+  const r=display.getBoundingClientRect();
+  return { x:(e.clientX-r.left)/r.width*W, y:(e.clientY-r.top)/r.height*H };
+}
+display.addEventListener('pointermove',e=>{ const p=mapXY(e); G.mx=p.x; G.my=p.y; });
+display.addEventListener('pointerdown',e=>{
+  e.preventDefault();
+  initAudio();
+  const p=mapXY(e); G.mx=p.x; G.my=p.y;
+  for(let i=HITS.length-1;i>=0;i--){
+    const h=HITS[i];
+    if(p.x>=h.x&&p.x<h.x+h.w&&p.y>=h.y&&p.y<h.y+h.h){ h.fn(); return; }
+  }
+});
+newGame();
+function frame(){
+  tick++;
+  HITS.length=0;
+  R(0,0,W,H,'#000');
+  switch(G.mode){
+    case 'title':   drawTitle(); break;
+    case 'brief':   drawBrief(); break;
+    case 'scene':   drawScene(); break;
+    case 'pick':    drawPick(); break;
+    case 'talk':    drawTalk(); break;
+    case 'travel':  drawTravel(); break;
+    case 'decoy':   drawDecoy(); break;
+    case 'dex':     drawDex(); break;
+    case 'notes':   drawNotes(); break;
+    case 'capture': drawCapture(); break;
+    case 'end':     drawEnd(); break;
+  }
+  dctx.drawImage(buf,0,0,display.width,display.height);
+  requestAnimationFrame(frame);
+}
+frame();
+</script>
+</body>
+</html>
