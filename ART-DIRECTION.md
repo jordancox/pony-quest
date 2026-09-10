@@ -1,5 +1,19 @@
 # Art production
 
+
+## Eight-frame walk-cycle revision
+
+Built-in imagegen produced `assets/art/paul-walk8.png` and `assets/art/pony-walk8.png`, referencing the four-frame sheets above. These are now the runtime walking assets. The original sheets are retained as source references. The renderer registers all frames on the head and a shared ground baseline instead of recentring each silhouette.
+
+### Paul
+
+Production pixel-art game sprite sheet. Use the supplied Paul sprite sheet as exact CHARACTER and ART STYLE reference. Create EIGHT full-body Paul frames in a precise 4-column x 2-row grid, equal cell sizes, read left to right top row then bottom row. ONE coherent gentle WALK CYCLE facing RIGHT, eight evenly spaced phases around the full cycle (contact, down, passing, up, opposite contact, down, passing, up). Do not repeat the same contact pose halfway through; opposite arm and leg must advance. Same identity: short receding dark greying hair, pale blue shirt, red tie, navy suit and trousers, yellow high-vis vest, black shoes. SAME adult proportions, face, size, torso shape and detailed LucasArts VGA pixel-art craft in every frame. The head and torso must stay at the same X position relative to each cell and nearly the same Y (at most tiny natural bob). Swing limbs around that stable torso. Keep feet at identical baseline in all cells. Plenty of margin on ALL four sides of every cell; limbs fully within their cell. No overlap between frames. Use restrained short natural steps, NOT an exaggerated parade march. Render sprite details and palette as close as possible to the reference. Solid UNIFORM PURE MAGENTA #FF00FF background, including gaps between limbs, no checkerboard, no transparency visualization, no shadows, no gridlines, no labels or text, no scenery. High fidelity sharp deliberate pixel clusters, not smooth painting or 3D. This is a production animation sheet that will be sliced into eight equal cells.
+
+### Pony
+
+Production pixel-art game sprite sheet. Use attached four-frame chestnut Shetland pony sheet as exact CHARACTER and ART STYLE reference. Create EIGHT full-body pony frames in a precise 4-column x 2-row grid, equal cells, read left to right top row then bottom row. ONE coherent gentle FOUR-BEAT WALK CYCLE facing RIGHT, eight equally spaced phases spanning a complete stride. Natural short pony steps, one hoof lifting at a time, no trotting or galloping. Every frame must show the same shaggy chestnut pony, same brown coat and long mane, pale muzzle, black hooves, true short stocky Shetland proportions. Preserve the excellent finely clustered LucasArts VGA pixel-art craft and colours of the reference. Head and body must stay fixed in the SAME X position relative to each cell with at most a tiny natural vertical bob. Animate the LEGS through eight progressive poses beneath the stable body. Keep identical scale and same hoof baseline in every cell. Plenty of magenta margins around each frame so every tail and hoof stays wholly within its equal grid cell. No overlapping frames. Uniform SOLID PURE MAGENTA #FF00FF background including between legs. No checkerboard, no shadows, no numbers, no text, no grid lines, no scenery. All pixels should have clear clean colour edges for chroma keying. No 3D, no smooth painting, no chibi or giant-headed redesign. This is a production walking-animation sheet to be sliced into eight equal cells.
+
+
 ## Paul’s playable character
 
 Built-in imagegen generated `assets/art/paul-key.png` using the original project’s `paul.jpg` as the face reference and `assets/art/motorway.png` as the style reference. The high-visibility vest and roadside outfit were added for the game.

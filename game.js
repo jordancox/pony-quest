@@ -3,6 +3,7 @@
   const $ = id => document.getElementById(id);
   const canvas = $('scene'), ctx = canvas.getContext('2d');
   const W = 960, H = 640, SAVE_KEY = 'pony-quest-illustrated-v1';
+  ctx.setTransform(2,0,0,2,0,0);
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const fresh = () => ({version:2, actor:'pony', room:'lane', x:410, y:500, inventory:[], gateOpen:false,
     handoverPending:false, conePlaced:false, roadClosed:false, carrotTaken:false, ponySettled:false,
@@ -24,8 +25,8 @@
     }
   } catch { /* Storage is optional, including for file:// play. */ }
   let ready=false, active=false, item=null, hovered=null, moving=false, inventoryOpen=false;
-  let target=null, arrival=null, direction=1, walkDistance=0, roomChanging=false;
-  let queue=[], speechDone=null, speaking=false, choiceOpen=false;
+  let target=null, arrival=null, direction=1, walkDistance=0, speed=0, roomChanging=false;
+  let queue=[], speechDone=null, speaking=false, choiceOpen=false, speechRemaining=0, speechCritical=false, currentSpeaker='', optionsOpen=false;
   let images={}, frames=[], paulFrames=[], lastTime=0, sound=false, audio=null, ambientTimer=null;
   const itemInfo={
     rope:{name:'rope',description:'A useful length of rope. Excellent for reaching things a small horse cannot.'},
@@ -61,18 +62,8 @@
     $('hint').disabled=!enabled;
   }
   function updateUI(){
-    $('room-label').textContent=state.room==='lane'?'The country lane':'The motorway';
-    $('chapter-label').textContent=state.actor==='pony'?'PROLOGUE · THE PONY':'PART ONE · PAUL ANTHEM';
-    $('inventory-label').textContent=state.actor==='pony'?'POCKETS (METAPHORICAL)':"PAUL’S POCKETS";
     $('stage').dataset.actor=state.actor;
-    canvas.setAttribute('aria-label',`${$('room-label').textContent}. Playing as ${state.actor==='pony'?'the pony':'Paul Anthem'}. Click the ground to walk, or Tab through the interactive object buttons.`);
-    $('objective').textContent=state.finished?'The real story, preserved in Horse & Hound.':
-      state.handoverPending?'The pony is free. Paul’s morning is about to change.':
-      state.actor==='pony'?'Escape the gate. The wider world awaits.':
-      !state.conePlaced?'Mark the checkpoint. Then radio Control.':
-      !state.roadClosed?'Radio Control to hold the traffic.':
-      !state.ponySettled?(has('carrot')?'Offer the carrot to the escaped pony.':'Find something to tempt the pony. Try the innkeeper.'):
-      'The pony is safe. Horse & Hound is waiting on the radio.';
+    canvas.setAttribute('aria-label',`${state.room==='lane'?'Country lane':'Motorway'}. Playing as ${state.actor==='pony'?'the pony':'Paul Anthem'}. Click the ground to walk, or Tab through interactive objects.`);
     $('hotspots').replaceChildren();
     for(const o of worldObjects()){
       const b=document.createElement('button'); b.className='hotspot'; b.dataset.object=o.id;
@@ -87,21 +78,24 @@
       bindInteraction(b,()=>interact(o),()=>interact(o,true));$('hotspots').append(b);
     }
     $('inventory').replaceChildren();
-    if(!state.inventory.length){const p=document.createElement('p');p.className='empty-inventory';p.textContent=state.actor==='pony'?'Nothing but ambition.':'Not nearly enough equipment.';$('inventory').append(p)}
+    if(!state.inventory.length){for(let i=0;i<3;i++){const slot=document.createElement('span');slot.className='empty-slot';slot.ariaHidden='true';$('inventory').append(slot)}}
     for(const id of state.inventory){
       const b=document.createElement('button');b.className='inventory-item'+(item===id?' selected':'');b.dataset.item=id;b.setAttribute('aria-label',itemInfo[id].name);b.setAttribute('aria-pressed',String(item===id));
       const c=document.createElement('canvas');c.width=48;c.height=48;c.ariaHidden='true';drawItem(c.getContext('2d'),id,0,0,48);
-      const name=document.createElement('span');name.textContent=itemInfo[id].name;b.append(c,name);
+      b.title=itemInfo[id].name;b.append(c);
       bindInteraction(b,()=>{
         if(!canAct())return;
         if(item===id){clearAction();return}
         item=id;inventoryOpen=false;tone(420,.05,.015);updateUI();
       },()=>{if(canAct())say(itemInfo[id].description)});$('inventory').append(b);
     }
-    $('inventory-count').textContent=String(state.inventory.length);
+    $('inventory-toggle').classList.toggle('holding',!!item);
+    $('selected-item').hidden=!item;$('bag-icon').toggleAttribute('hidden',!!item);
+    if(item){const c=$('selected-item').getContext('2d');c.clearRect(0,0,48,48);drawItem(c,item,0,0,48)}
+    $('options').hidden=!optionsOpen;$('options-toggle').setAttribute('aria-expanded',String(optionsOpen));
     $('inventory-panel').hidden=!inventoryOpen;
     $('inventory-toggle').setAttribute('aria-expanded',String(inventoryOpen));
-    sentence();setUIEnabled(active&&!speaking&&!choiceOpen&&!roomChanging&&!state.handoverPending&&!state.finished);
+    sentence();setUIEnabled(active&&!speechCritical&&!choiceOpen&&!roomChanging&&!state.handoverPending&&!state.finished);
   }
   function primaryAction(o){
     if(['sign','sky','m25','road'].includes(o.id))return 'Look at';
@@ -113,7 +107,7 @@
   function sentence(){
     $('command').textContent=item?`Use ${itemInfo[item].name} with ${hovered?.name||'…'}`:
       hovered?`${primaryAction(hovered)} ${hovered.name}`:'Click to walk · right-click to examine';
-    $('cancel-action').hidden=!item;
+
   }
   function clearAction(){item=null;hovered=null;updateUI()}
   // One primary action per hotspot; examination is optional and never blocks a puzzle.
@@ -130,29 +124,53 @@
     button.addEventListener('click',()=>{if(held){held=false;return}primary()});
     button.addEventListener('contextmenu',e=>{e.preventDefault();cancelHold();if(!held)examine()});
   }
-  function canAct(){return active&&ready&&!speaking&&!choiceOpen&&!roomChanging&&!state.handoverPending&&!state.finished&&!$('help-dialog').open}
+  function canWalk(){return active&&ready&&!choiceOpen&&!roomChanging&&!state.handoverPending&&!state.finished&&!$('help-dialog').open}
+  function canAct(){return canWalk()&&!speechCritical}
   function addItem(id){if(!has(id))state.inventory.push(id);inventoryOpen=true;tone(640,.1,.025);updateUI();save()}
   function removeItem(id){state.inventory=state.inventory.filter(i=>i!==id);if(item===id)item=null;updateUI();save()}
 
   function say(lines,done){
-    stopWalk();
     queue=(Array.isArray(lines)?lines:[lines]).map(l=>typeof l==='string'?{who:state.actor==='pony'?'Pony':'Paul',text:l}:l);
-    speechDone=done||null;nextSpeech();
+    speechDone=done||null;speechCritical=!!done;nextSpeech();
   }
   function nextSpeech(){
+    if(!speaking&&!queue.length)return;
     const line=queue.shift();
-    if(!line){speaking=false;$('speech').hidden=true;const fn=speechDone;speechDone=null;updateUI();if(fn)fn();return}
-    speaking=true;$('speech').hidden=false;$('speaker').textContent=line.who;$('speech-text').textContent=line.text;
-    $('speech-text').style.color=line.who==='Pony'?'#ffecb0':'#c6e5ec';setUIEnabled(false);tone(line.who==='Pony'?370:230,.045,.012);
+    if(!line){
+      speaking=false;speechCritical=false;$('speech').hidden=true;
+      const fn=speechDone;speechDone=null;updateUI();if(fn)fn();return;
+    }
+    speaking=true;currentSpeaker=line.who;
+    const radio=['Control','Horse & Hound','Police radio'].includes(line.who);
+    $('speech').dataset.voice=radio?'radio':line.who.startsWith('Innkeeper')?'innkeeper':line.who.toLowerCase();
+    $('speech').hidden=false;$('speaker').textContent=line.who;
+    $('radio-speaker').textContent=line.who;
+    $('speech-text').textContent=line.text;
+    speechRemaining=Math.max(2.4,Math.min(9,.9+line.text.length*.048));
+    setUIEnabled(canAct());positionSpeech();
+    if(radio)radioSquawk();else tone(line.who==='Pony'?370:230,.045,.012);
+  }
+  function positionSpeech(){
+    if(!speaking||$('speech').dataset.voice==='radio')return;
+    let x=state.x,y=state.y-actorHeight(state.actor,state.y)-16;
+    if(currentSpeaker==='Pony'&&state.actor==='paul'){x=658;y=490-actorHeight('pony',490)-16}
+    if(currentSpeaker.startsWith('Innkeeper')){x=130;y=270}
+    const box=$('stage').getBoundingClientRect(),speech=$('speech');
+    const half=speech.offsetWidth/box.width*W/2;
+    x=Math.max(half+14,Math.min(W-half-14,x));
+    const textHeight=speech.offsetHeight/box.height*H;
+    y=Math.max(textHeight+15,Math.min(H-50,y));
+    speech.style.left=`${x/W*100}%`;speech.style.top=`${y/H*100}%`;
   }
   function choices(options){
-    choiceOpen=true;$('choices').hidden=false;$('choices').replaceChildren();
+    stopWalk();choiceOpen=true;$('choices').hidden=false;$('choices').replaceChildren();
     options.forEach(o=>{const b=document.createElement('button');b.textContent='› '+o.text;b.onclick=()=>{choiceOpen=false;$('choices').hidden=true;updateUI();o.run()};$('choices').append(b)});
     setUIEnabled(false);$('choices').firstElementChild.focus({preventScroll:true});
   }
   const person=(who,text)=>({who,text});
   function interact(o,examine=false){
-    if(!canAct())return;
+    if(!canAct()){if(canWalk())walkTo(...o.walk);return}
+    optionsOpen=false;
     const action=examine?'Look at':item?'Use':primaryAction(o),used=examine?null:item;hovered=o;sentence();
     if(action==='Look at'){perform(o,action,used);return}
     walkTo(...o.walk,()=>perform(o,action,used));
@@ -325,9 +343,9 @@
     [x,y]=constrain(x,y);target={x,y};arrival=fn||null;moving=true;
     if(Math.abs(x-state.x)>2)direction=x>state.x?1:-1;
   }
-  function stopWalk(){moving=false;target=null;arrival=null}
+  function stopWalk(){moving=false;target=null;arrival=null;speed=0}
   async function changeRoom(room){
-    stopWalk();roomChanging=true;setUIEnabled(false);$('curtain').classList.add('closed');
+    stopWalk();optionsOpen=false;inventoryOpen=false;roomChanging=true;setUIEnabled(false);$('curtain').classList.add('closed');
     await new Promise(r=>setTimeout(r,reducedMotion.matches?0:220));
     state.room=room;state.x=room==='lane'?720:440;state.y=room==='lane'?540:459;direction=room==='lane'?-1:1;
     const escaped=room==='motorway'&&state.actor==='pony';
@@ -336,22 +354,22 @@
     if(escaped)say(['The M25. At last.','It looked smaller from the field.'],showHandover);
   }
   canvas.addEventListener('click',e=>{
-    if(speaking){nextSpeech();return}if(!canAct())return;
+    if(!canWalk())return;
     const r=canvas.getBoundingClientRect(), x=(e.clientX-r.left)/r.width*W,y=(e.clientY-r.top)/r.height*H;
     if(item)clearAction();
-    inventoryOpen=false;updateUI();walkTo(x,y);
+    inventoryOpen=false;optionsOpen=false;updateUI();walkTo(x,y);
   });
-  $('speech-next').onclick=nextSpeech;
-  $('cancel-action').onclick=()=>{if(canAct()){stopWalk();clearAction()}};
-  $('inventory-toggle').onclick=()=>{if(canAct()){inventoryOpen=!inventoryOpen;updateUI()}};
+  $('options-toggle').onclick=()=>{optionsOpen=!optionsOpen;inventoryOpen=false;updateUI()};
+  $('inventory-toggle').onclick=()=>{if(canAct()){inventoryOpen=!inventoryOpen;optionsOpen=false;updateUI()}};
   $('inventory-close').onclick=()=>{inventoryOpen=false;updateUI();$('inventory-toggle').focus()};
   $('hotspot-toggle').onclick=()=>{const on=$('stage').classList.toggle('show-hotspots');$('hotspot-toggle').setAttribute('aria-pressed',String(on))};
-  $('help-toggle').onclick=()=>{$('help-dialog').showModal()};
+  $('help-toggle').onclick=()=>{optionsOpen=false;updateUI();$('help-dialog').showModal()};
   for(const b of document.querySelectorAll('.dialog-close,.dialog-done'))b.onclick=()=>$('help-dialog').close();
   $('fullscreen-toggle').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await $('game').requestFullscreen()}catch{$('fullscreen-toggle').title='Fullscreen is unavailable in this browser'}};
   if(!document.fullscreenEnabled)$('fullscreen-toggle').hidden=true;
   $('hint').onclick=()=>{
     if(!canAct())return;
+    optionsOpen=false;updateUI();
     const hint=state.actor==='pony'?(has('rope')?'Click the rope in your pockets, then click the gate latch.':'Pick up the loose rope on the path. A small horse needs a little extra reach.'):
       !state.conePlaced?(has('cone')?'Use the cone at the traffic checkpoint beside the barrier.':'Open the maintenance hut to get a cone.'):
       !state.roadClosed?'Talk to the police radio to have Control stop the traffic.':
@@ -362,8 +380,8 @@
   document.addEventListener('keydown',e=>{
     if($('help-dialog').open)return;
     const isButton=e.target.closest?.('button');
-    if((e.key==='Enter'||e.key===' ')&&speaking&&!isButton){e.preventDefault();nextSpeech();return}
-    if(e.key==='Escape'&&canAct()){stopWalk();inventoryOpen=false;clearAction();return}
+    if((e.key===' '||(e.key==='Enter'&&!isButton))&&speaking){e.preventDefault();nextSpeech();return}
+    if(e.key==='Escape'){optionsOpen=false;inventoryOpen=false;clearAction();return}
     if(e.key.toLowerCase()==='h'&&active){$('hotspot-toggle').click();return}
     if(e.key.toLowerCase()==='i'&&canAct()){e.preventDefault();$('inventory-toggle').click();return}
     if(e.key.toLowerCase()==='e'&&canAct()){
@@ -378,11 +396,11 @@
     if(!ready)return;
     state=(!reset&&saved)?{...saved,inventory:[...saved.inventory]}:fresh();saved=null;
     [state.x,state.y]=constrain(state.x,state.y);
-    const intro=!state.started;state.started=true;active=true;queue=[];speaking=false;choiceOpen=false;roomChanging=false;stopWalk();
+    const intro=!state.started;state.started=true;active=true;queue=[];speaking=false;speechDone=null;speechCritical=false;choiceOpen=false;roomChanging=false;optionsOpen=false;stopWalk();
     $('speech').hidden=true;$('choices').hidden=true;$('title-screen').hidden=true;$('ending').hidden=!state.finished;$('handover').hidden=true;inventoryOpen=false;
     clearAction();save();
     if(state.handoverPending){showHandover();return}
-    if(intro)say(['Some ponies dream of open fields.','I dream bigger.'],()=>updateUI());
+    if(intro)say(['Some ponies dream of open fields.','I dream bigger.']);
   }
 
   // Small native pixel props remain separate, collectible objects rather than baked scenery.
@@ -420,45 +438,77 @@
     const actors=[{x:state.x,y:state.y,type:state.actor,walking:moving,dir:direction}];
     if(state.actor==='paul'&&state.room==='motorway')actors.push({x:658,y:490,type:'pony',walking:false,dir:-1});
     actors.sort((a,b)=>a.y-b.y).forEach(drawActor);
+    if(speaking&&$('speech').dataset.voice==='radio'&&state.room==='motorway'){
+      ctx.save();ctx.strokeStyle='#a2f5ff';ctx.lineWidth=2;
+      const phase=reducedMotion.matches?1:(Math.floor(t/140)%3)+1;
+      for(let i=0;i<phase;i++){ctx.beginPath();ctx.arc(562,316,10+i*8,-.9,.9);ctx.stroke()}
+      ctx.restore();
+    }
+    positionSpeech();
   }
+  function actorHeight(type,y){return (type==='paul'?166:109)*(.84+(y-435)/260)}
   function drawActor(actor){
-    const scale=.84+(actor.y-435)/260;
     const sheet=actor.type==='paul'?paulFrames:frames;
-    const frame=sheet[actor.walking&&!reducedMotion.matches?Math.floor(walkDistance/20)%sheet.length:0];
-    if(!frame)return;
-    const height=(actor.type==='paul'?166:109)*scale,width=height*frame.width/frame.height;
-    ctx.fillStyle='#16102370';ctx.beginPath();ctx.ellipse(Math.round(actor.x),Math.round(actor.y-2),width*.39,6*scale,0,0,Math.PI*2);ctx.fill();
-    ctx.save();ctx.translate(Math.round(actor.x),Math.round(actor.y));ctx.scale(actor.dir,1);
-    ctx.drawImage(frame,Math.round(-width/2),Math.round(-height),Math.round(width),Math.round(height));ctx.restore();
+    if(!sheet.length)return;
+    const cycleDistance=actor.type==='paul'?88:98;
+    const index=actor.walking&&!reducedMotion.matches?Math.floor(walkDistance/cycleDistance*sheet.length)%sheet.length:2;
+    const frame=sheet[index];
+    const zoom=actorHeight(actor.type,actor.y)/frame.bodyHeight;
+    ctx.fillStyle='#16102370';ctx.beginPath();ctx.ellipse(actor.x,actor.y-2,actor.type==='paul'?20:49,6,0,0,Math.PI*2);ctx.fill();
+    ctx.save();ctx.translate(actor.x,actor.y);ctx.scale(actor.dir,1);
+    ctx.drawImage(frame.image,-frame.anchorX*zoom,-frame.anchorY*zoom,frame.image.width*zoom,frame.image.height*zoom);ctx.restore();
   }
-
   function tick(t){
     const dt=Math.min((t-lastTime)/1000||0,.05);lastTime=t;
-    if(moving&&target&&!speaking&&!$('help-dialog').open){
-      const dx=target.x-state.x,dy=target.y-state.y,d=Math.hypot(dx,dy),step=165*dt;
-      if(d<=step){state.x=target.x;state.y=target.y;const fn=arrival;stopWalk();save();if(fn)fn()}
+    const paused=$('help-dialog').open||document.hidden;
+    if(moving&&target&&!paused){
+      const dx=target.x-state.x,dy=target.y-state.y,d=Math.hypot(dx,dy);
+      const cruise=state.actor==='paul'?120:130;
+      speed=Math.min(cruise,speed+640*dt,Math.sqrt(2*600*d));
+      const step=Math.min(d,speed*dt);
+      if(d<.35||step>=d){state.x=target.x;state.y=target.y;const fn=arrival;stopWalk();save();if(fn)fn()}
       else{state.x+=dx/d*step;state.y+=dy/d*step;walkDistance+=step;}
     }
+    if(speaking&&!paused){speechRemaining-=dt;if(speechRemaining<=0)nextSpeech()}
     draw(t);requestAnimationFrame(tick);
   }
   function loadImage(src){return new Promise((resolve,reject)=>{const img=new Image();img.onload=()=>resolve(img);img.onerror=()=>reject(new Error('Could not load '+src));img.src=src})}
   function buildFrames(img){
-    const result=[];
-    // Chroma-key is performed once on load; all gameplay uses the cached sprite frames.
-    const atlas=document.createElement('canvas');atlas.width=img.width;atlas.height=img.height;
+    const result=[],atlas=document.createElement('canvas');atlas.width=img.width;atlas.height=img.height;
     const a=atlas.getContext('2d',{willReadFrequently:true});a.drawImage(img,0,0);
     const data=a.getImageData(0,0,atlas.width,atlas.height),p=data.data;
     for(let i=0;i<p.length;i+=4){if(p[i]>p[i+1]+65&&p[i+2]>p[i+1]+55)p[i+3]=0}
     a.putImageData(data,0,0);
-    const cell=img.width/4;
-    for(let n=0;n<4;n++){
-      let minX=Math.ceil(n*cell),maxX=Math.floor((n+1)*cell)-1,minY=0,maxY=img.height-1;
-      let bx=maxX,by=maxY,ex=minX,ey=0;
-      for(let y=minY;y<=maxY;y++)for(let x=minX;x<=maxX;x++){if(p[(y*img.width+x)*4+3]>0){bx=Math.min(bx,x);by=Math.min(by,y);ex=Math.max(ex,x);ey=Math.max(ey,y)}}
-      const f=document.createElement('canvas');f.width=ex-bx+1;f.height=ey-by+1;
-      f.getContext('2d').drawImage(atlas,bx,by,f.width,f.height,0,0,f.width,f.height);result.push(f);
+    const cw=img.width/4,ch=img.height/2,regions=[];
+    for(let n=0;n<8;n++){
+      const sx=Math.round(n%4*cw),sy=Math.round(Math.floor(n/4)*ch);
+      let bx=cw,by=ch,ex=0,ey=0;
+      for(let y=0;y<ch;y++)for(let x=0;x<cw;x++)if(p[((sy+y)*img.width+sx+x)*4+3]>0){bx=Math.min(bx,x);by=Math.min(by,y);ex=Math.max(ex,x);ey=Math.max(ey,y)}
+      // Register on the head, not the silhouette of swinging limbs.
+      let sum=0,count=0;
+      const headBottom=by+(ey-by)*.19;
+      for(let y=by;y<headBottom;y++)for(let x=bx;x<=ex;x++)if(p[((sy+y)*img.width+sx+x)*4+3]>0){sum+=x;count++}
+      regions.push({sx,sy,bx,by,ex,ey,headX:sum/Math.max(1,count)});
+    }
+    const median=values=>values.sort((a,b)=>a-b)[Math.floor(values.length/2)];
+    const refHead=median(regions.map(r=>r.headX)),top=median(regions.map(r=>r.by));
+    const bottom=median(regions.map(r=>r.ey)),bodyHeight=bottom-top+1;
+    const center=median(regions.map(r=>(r.bx+r.ex)/2+refHead-r.headX));
+    for(const r of regions){
+      const f=document.createElement('canvas');f.width=Math.ceil(cw+80);f.height=Math.ceil(bodyHeight+64);
+      f.getContext('2d').drawImage(atlas,r.sx,r.sy,cw,ch,40+refHead-r.headX,32-r.by,cw,ch);
+      result.push({image:f,anchorX:40+center,anchorY:32+bodyHeight,bodyHeight});
     }
     return result;
+  }
+  function radioSquawk(){
+    if(!sound||!audio)return;
+    const duration=.18,buffer=audio.createBuffer(1,Math.ceil(audio.sampleRate*duration),audio.sampleRate);
+    const samples=buffer.getChannelData(0);for(let i=0;i<samples.length;i++)samples[i]=(Math.random()*2-1)*.13;
+    const source=audio.createBufferSource(),filter=audio.createBiquadFilter(),gain=audio.createGain();
+    source.buffer=buffer;filter.type='bandpass';filter.frequency.value=1500;filter.Q.value=.8;
+    gain.gain.setValueAtTime(.5,audio.currentTime);gain.gain.exponentialRampToValueAtTime(.001,audio.currentTime+duration);
+    source.connect(filter).connect(gain).connect(audio.destination);source.start();
   }
   function tone(freq,duration,volume){
     if(!sound||!audio)return;
@@ -476,11 +526,11 @@
   };
   async function load(){
     try{
-      const [lane,motorway,pony,paul]=await Promise.all([loadImage('assets/art/country-lane.png'),loadImage('assets/art/motorway.png'),loadImage('assets/art/pony-key.png'),loadImage('assets/art/paul-key.png')]);
+      const [lane,motorway,pony,paul]=await Promise.all([loadImage('assets/art/country-lane.png'),loadImage('assets/art/motorway.png'),loadImage('assets/art/pony-walk8.png'),loadImage('assets/art/paul-walk8.png')]);
       images={lane,motorway};frames=buildFrames(pony);paulFrames=buildFrames(paul);ready=true;
-      $('start').disabled=false;$('start').textContent=saved?(saved.finished?'Read your headline':saved.handoverPending?'Continue as Paul':'Continue adventure'):'Begin the adventure';$('new-game').hidden=!saved;
+      $('start').disabled=false;$('start').textContent=saved?(saved.finished?'Read your headline':saved.handoverPending?'Continue as Paul':'Continue'):'Play';$('new-game').hidden=!saved;
       updateUI();
-    }catch(error){$('load-status').textContent='The artwork could not load. Check the connection, then retry.';$('start').disabled=false;$('start').textContent='Retry loading';$('start').onclick=()=>{location.reload()};console.error(error)}
+    }catch(error){$('load-status').hidden=false;$('load-status').textContent='Could not load the artwork. Please retry.';$('start').disabled=false;$('start').textContent='Retry loading';$('start').onclick=()=>{location.reload()};console.error(error)}
   }
   updateUI();load();requestAnimationFrame(tick);
 })();

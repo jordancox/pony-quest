@@ -4,38 +4,39 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="theme-color" content="#111018">
 <meta name="description" content="A small pony. A very big road. An illustrated point-and-click adventure.">
 <title>Pony Quest — The Secret of the M25</title>
+<link rel="preload" href="assets/fonts/VT323-Regular.ttf" as="font" type="font/ttf" crossorigin>
 <link rel="stylesheet" href="game.css"><script src="game.js" defer></script>
 </head>
 <body>
 <main id="game" aria-label="Pony Quest adventure game">
-<header class="masthead"><div class="brand">PONY QUEST <span>The Secret of the M25</span></div><nav aria-label="Game controls"><button id="hotspot-toggle" aria-pressed="false" title="Show interactive objects (H)">Hotspots <kbd>H</kbd></button><button id="sound-toggle" aria-pressed="false">Sound off</button><button id="help-toggle" aria-label="How to play">?</button><button id="fullscreen-toggle" aria-label="Fullscreen">⛶</button></nav></header>
 <section class="cabinet" aria-label="Adventure">
 <div id="stage" class="stage">
-<canvas id="scene" width="960" height="640" aria-label="Country lane. Click the ground to walk or use the interactive object buttons."></canvas>
-<div class="room-caption"><span id="chapter-label">PROLOGUE · THE PONY</span><span id="room-label">The country lane</span></div>
+<canvas id="scene" width="1920" height="1280" aria-label="Country lane. Click the ground to walk or use the interactive object buttons."></canvas>
 <div id="hotspots" aria-label="Objects in this scene"></div>
-<div id="speech" class="speech" role="status" aria-live="polite" hidden><span id="speaker">Pony</span><p id="speech-text"></p><button id="speech-next">Continue <span>↵</span></button></div>
+<div id="speech" class="speech" role="status" aria-live="polite" hidden>
+<span id="speaker" class="sr-only"></span>
+<div class="radio-call" aria-hidden="true"><svg viewBox="0 0 36 24"><path d="M2 9h8l6-6v18l-6-6H2z"/><path class="radio-waves" d="M22 6q6 6 0 12M28 2q10 10 0 20"/></svg><span id="radio-speaker"></span></div>
+<p id="speech-text"></p>
+</div>
 <div id="choices" class="choices" aria-label="Dialogue choices" hidden></div>
 <div id="curtain" class="curtain" aria-hidden="true"></div>
-<div id="title-screen" class="title-screen"><div class="title-content"><p class="eyebrow">A POINT-AND-CLICK MISADVENTURE</p><h1>Pony Quest</h1><p class="subtitle">The Secret of the M25</p><div class="title-rule">◆</div><p class="tagline">A small pony. A very big road.<br>Absolutely no sense of proportion.</p><button id="start" class="primary" disabled>Preparing the countryside…</button><button id="new-game" class="text-button" hidden>Start a new adventure</button><p id="load-status" class="fine-print">First, cause the trouble. Then, be Paul.</p></div></div>
-<div id="handover" class="handover" hidden><p class="eyebrow">PROLOGUE COMPLETE</p><h2>A taste of freedom.</h2><p class="handover-story">One pony has escaped.<br>Somewhere nearby, a telephone rings.</p><div class="title-rule">◆</div><p class="eyebrow">PART ONE · PAUL ANTHEM</p><p class="handover-line">“The situation is under control.”</p><p class="handover-note">You are now the man who has to make that true.</p><button id="play-paul" class="primary">Play as Paul</button></div>
+<div id="title-screen" class="title-screen"><h1>Pony Quest</h1><p class="subtitle">The Secret of the M25</p><button id="start" class="primary" disabled>Loading…</button><button id="new-game" class="text-button" hidden>New game</button><p id="load-status" role="status" hidden></p></div>
+<div id="handover" class="handover" hidden><h2>Paul Anthem</h2><p>“The situation is under control.”</p><button id="play-paul" class="primary">Play as Paul</button></div>
 <article id="ending" class="ending" aria-label="Horse and Hound epilogue" tabindex="-1" hidden>
-<div class="article-kicker">EPILOGUE · THE REAL STORY</div><div class="article-masthead">Horse &amp; Hound</div>
-<div class="article-meta"><span>NEWS · 10 OCTOBER 2003</span><span>16:07</span></div>
+<div class="article-masthead">Horse &amp; Hound</div><p class="article-meta">10 October 2003</p>
 <h2 id="ending-headline">Loose Shetland closes M25</h2>
-<p class="article-intro">A small pony’s bid for freedom really did stop a stretch of the M25.</p>
 <blockquote id="ending-quote">“He seemed excited rather than distressed”<cite>Paul Anthem · Thames Valley Police</cite></blockquote>
 <p class="article-copy">A Shetland wandered onto the M25 near the M4 interchange, travelling north along the southbound carriageway. Four officers and members of the public caught it; a nearby field of Shetlands was thought to be its home.</p>
 <div class="article-timeline"><div><b>06:30</b><span>First call</span></div><div><b>06:50</b><span>Road closed</span></div><div><b>07:15</b><span>Pony caught</span></div><div><b>07:37</b><span>Road reopened</span></div></div>
-<p class="article-coda">One escaped pony. Forty-seven minutes of closure.<br>And a quote that was far too good to lose.</p>
 <div class="article-actions"><a id="article-source" href="https://www.horseandhound.co.uk/news/loose-shetland-closes-m25-41577" target="_blank" rel="noopener noreferrer">Read the original report ↗</a><button id="replay">Play again</button></div>
 </article>
-<div id="inventory-panel" class="inventory-panel" hidden><div class="inventory-heading"><span id="inventory-label">POCKETS (METAPHORICAL)</span><button id="inventory-close" aria-label="Close pockets">×</button></div><div id="inventory" class="inventory" aria-label="Inventory"><p class="empty-inventory">Nothing but ambition.</p></div></div>
+<div id="inventory-panel" class="inventory-panel" hidden><button id="inventory-close" class="icon-button" aria-label="Close inventory">×</button><div id="inventory" class="inventory" aria-label="Inventory"></div></div>
+<div id="options" class="options" hidden><button id="sound-toggle" aria-pressed="false">Sound off</button><button id="hotspot-toggle" aria-pressed="false">Show hotspots</button><button id="fullscreen-toggle">Fullscreen</button><button id="help-toggle">How to play</button><button id="hint">Hint</button></div>
+<div class="game-tools"><button id="inventory-toggle" class="icon-button" aria-label="Inventory" aria-expanded="false" aria-controls="inventory-panel" title="Inventory (I)"><svg id="bag-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="M7 11h18v16H7zM12 11V6h8v5M7 18h18M14 17v4h4v-4"/></svg><canvas id="selected-item" width="48" height="48" hidden aria-hidden="true"></canvas></button><button id="options-toggle" class="icon-button" aria-label="Options" aria-expanded="false" aria-controls="options" title="Options"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M6 9h20M6 16h20M6 23h20"/></svg></button></div>
+<span id="command" class="sr-only" aria-live="polite"></span>
 </div>
-<div class="command-bar"><div class="action-readout" aria-live="polite"><span id="command">Click to walk</span><button id="cancel-action" aria-label="Put selected item away" title="Put item away (Escape)" hidden>×</button></div><button id="inventory-toggle" aria-expanded="false" aria-controls="inventory-panel" title="Pockets (I)">Pockets <span id="inventory-count">0</span></button></div>
 </section>
-<footer><span id="objective">An unusually promising morning.</span><button id="hint">A small hint</button></footer>
 </main>
-<dialog id="help-dialog"><button class="dialog-close" aria-label="Close help">×</button><p class="eyebrow">A BRIEF GUIDE TO A VERY LONG MORNING</p><h2>Two sides of the story.</h2><p>Begin as the escaping pony. Once you reach the motorway, take over as Paul to recover it and handle the press.</p><p>Click or tap the ground to walk. Click an object to do the natural thing: talk, pick it up, open it or use it. Hovering shows what will happen.</p><p>Open <b>Pockets</b> and select an item, then click what you want to use it on. Right-click an object to examine it; on touchscreens, press and hold.</p><dl><dt>H</dt><dd>Show interactive objects</dd><dt>I</dt><dd>Open or close pockets</dd><dt>E</dt><dd>Examine a focused object</dd><dt>Esc</dt><dd>Put an item away / close pockets</dd><dt>Enter / Space</dt><dd>Continue dialogue</dd><dt>Tab / Enter</dt><dd>Navigate and activate controls</dd></dl><p class="help-note">Your progress saves in this browser. Sound is optional. There are no timers and no dead ends.</p><button class="primary dialog-done">Back to the adventure</button></dialog>
+<dialog id="help-dialog"><button class="dialog-close icon-button" aria-label="Close help">×</button><h2>How to play</h2><p>Click to walk or interact. Right-click to examine; on touchscreens, press and hold.</p><p>Select an inventory item, then click its target.</p><p>Dialogue advances automatically. Space skips a line. You can keep walking while people talk.</p><dl><dt>I</dt><dd>Inventory</dd><dt>H</dt><dd>Show hotspots</dd><dt>E</dt><dd>Examine focused object</dd><dt>Esc</dt><dd>Close / put item away</dd></dl><button class="primary dialog-done">Back to the game</button></dialog>
 <noscript>This adventure needs JavaScript enabled to run.</noscript>
 </body></html>

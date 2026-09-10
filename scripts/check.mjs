@@ -10,7 +10,7 @@ const speech=()=>page.waitForFunction(()=>!document.querySelector('#speech').hid
 async function drain(){
   for(let i=0;i<10;i++){
     if(await page.$eval('#speech',el=>el.hidden))return;
-    await page.click('#speech-next');await pause(35);
+    await page.keyboard.press('Space');await pause(35);
   }
   throw new Error('Dialogue did not drain');
 }
@@ -25,8 +25,18 @@ try{
  await page.goto(process.env.GAME_URL || 'http://localhost:8090',{waitUntil:'networkidle0'});
  await page.waitForFunction(()=>!document.querySelector('#start').disabled);
  await page.screenshot({path:'output/title-desktop.png'});
- await page.click('#start');await drain();
+ await page.click('#start');
+ await page.evaluate(()=>document.fonts.ready);
+ await page.screenshot({path:'output/pony-speech-desktop.png'});
+ assert.equal(await page.$eval('#speech',e=>getComputedStyle(e).backgroundColor),'rgba(0, 0, 0, 0)');
+ await page.waitForFunction(()=>document.querySelector('#speech-text').textContent==='I dream bigger.',{timeout:6000});
+ await drain();
+ await page.mouse.move(0,0);
  await page.screenshot({path:'output/country-lane-desktop.png'});
+ assert.equal(await page.$('.room-caption'),null);
+ assert.equal(await page.$('.masthead'),null);
+ assert.equal(await page.$('footer'),null);
+ assert.equal(await page.$('#inventory-label'),null);
  assert.equal(await page.$('#verbs'),null);
  // Examine object and NPC dialogue, then solve with the inventory.
  await page.click('[data-object="gate"]',{button:'right'});await speech();
@@ -37,7 +47,7 @@ try{
  await clickObject('rope');await drain();
  assert.ok(await page.$('[data-item="rope"]'));
  await selectItem('rope');await page.click('[data-object="gate"]');await speech();await drain();
- await page.waitForFunction(()=>document.querySelector('#room-label').textContent==='The motorway');
+ await page.waitForFunction(()=>JSON.parse(localStorage.getItem('pony-quest-illustrated-v1')).room==='motorway');
  await speech();await drain();
  await page.waitForFunction(()=>!document.querySelector('#handover').hidden);
  assert.equal(await page.$eval('#stage',e=>e.dataset.actor),'pony');
@@ -52,6 +62,18 @@ try{
  assert.ok(await page.$('[data-object="pony"]'));
  assert.equal(await page.$$eval('.inventory-item',e=>e.length),0);
  await page.screenshot({path:'output/paul-motorway-desktop.png'});
+ // Radio has a distinct source and does not stop the world or the player.
+ await clickObject('radio');
+ assert.equal(await page.$eval('#speech',e=>e.dataset.voice),'radio');
+ await page.screenshot({path:'output/radio-speech-desktop.png'});
+ const ground=await page.$eval('#scene',e=>{const r=e.getBoundingClientRect();return {x:r.x+r.width*360/960,y:r.y+r.height*500/640}});
+ await page.mouse.click(ground.x,ground.y);
+ await page.waitForFunction(()=>Math.abs(JSON.parse(localStorage.getItem('pony-quest-illustrated-v1')).x-360)<1,{timeout:4000});
+ assert.equal(await page.$eval('#speech',e=>e.hidden),false);
+ await drain();
+ await page.click('[data-object="pony"]',{button:'right'});await speech();
+ assert.equal(await page.$eval('#speech',e=>e.dataset.voice),'paul');
+ await page.screenshot({path:'output/paul-speech-desktop.png'});await drain();
  // Paul's player identity and inventory survive reloads independently of the prologue.
  await page.reload({waitUntil:'networkidle0'});await page.waitForFunction(()=>!document.querySelector('#start').disabled);
  await page.click('#start');
@@ -63,7 +85,7 @@ try{
  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pony-quest-illustrated-v1')).roadClosed),false);
  // Paul retraces the pony's route and gets a carrot from the innkeeper.
  await page.click('[data-object="back"]');
- await page.waitForFunction(()=>document.querySelector('#room-label').textContent==='The country lane');
+ await page.waitForFunction(()=>JSON.parse(localStorage.getItem('pony-quest-illustrated-v1')).room==='lane');
  assert.equal(await page.$eval('#stage',e=>e.dataset.actor),'paul');
  await page.focus('[data-object="gate"]');await page.keyboard.press('e');await speech();
  assert.equal(await page.$eval('#speaker',e=>e.textContent),'Paul');
@@ -72,7 +94,7 @@ try{
  await page.click('#choices button');await drain();
  assert.ok(await page.$('[data-item="carrot"]'));
  await page.click('[data-object="path"]');
- await page.waitForFunction(()=>document.querySelector('#room-label').textContent==='The motorway');
+ await page.waitForFunction(()=>JSON.parse(localStorage.getItem('pony-quest-illustrated-v1')).room==='motorway');
  // An early carrot attempt is refused without consuming it; no dead end.
  await selectItem('carrot');await clickObject('pony');
  assert.match(await page.$eval('#speech-text',e=>e.textContent),/Traffic first/);await drain();
@@ -97,12 +119,12 @@ try{
  await page.click('#choices button:nth-child(3)');await drain();
  assert.equal(await page.$eval('#ending-headline',e=>e.textContent),'Loose Shetland closes M25');
  await page.click('#replay');await drain();
- assert.equal(await page.$eval('#room-label',e=>e.textContent),'The country lane');
+ assert.match(await page.$eval('#scene',e=>e.getAttribute('aria-label')),/Country lane/);
  assert.equal(await page.$$eval('.inventory-item',e=>e.length),0);
  await page.keyboard.press('h');assert.equal(await page.$eval('#hotspot-toggle',e=>e.getAttribute('aria-pressed')),'true');
  await page.keyboard.press('h');
- await page.click('#help-toggle');assert.ok(await page.$eval('#help-dialog',e=>e.open));await page.keyboard.press('Escape');
- await page.click('#sound-toggle');assert.equal(await page.$eval('#sound-toggle',e=>e.textContent),'Sound on');await page.click('#sound-toggle');
+ await page.click('#options-toggle');await page.click('#help-toggle');assert.ok(await page.$eval('#help-dialog',e=>e.open));await page.keyboard.press('Escape');
+ await page.click('#options-toggle');await page.click('#sound-toggle');assert.equal(await page.$eval('#sound-toggle',e=>e.textContent),'Sound on');await page.click('#sound-toggle');
  // Migrate the previous pony-only game's completed save into the new chapter boundary.
  await page.evaluate(()=>localStorage.setItem('pony-quest-illustrated-v1',JSON.stringify({room:'motorway',x:500,y:480,inventory:['carrot'],gateOpen:true,roadClosed:true,finished:true,started:true})));
  await page.reload({waitUntil:'networkidle0'});await page.waitForFunction(()=>!document.querySelector('#start').disabled);
@@ -118,7 +140,7 @@ try{
  await page.tap('#start');await pause(150);
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
  await page.screenshot({path:'output/paul-mobile.png'});
- await page.tap('#hint');await speech();await drain();
+ await page.tap('#options-toggle');await page.tap('#hint');await speech();await drain();
  // Optional examination works on touch without activating the primary interaction.
  const sign=await page.$eval('[data-object="m25"]',e=>{const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}});
  await page.touchscreen.touchStart(sign.x,sign.y);await pause(550);await page.touchscreen.touchEnd();
@@ -141,4 +163,8 @@ try{
  assert.ok(bounds.top>=0&&bounds.bottom<=bounds.height,'Landscape cabinet must fit vertically');
  assert.deepEqual(errors,[]);
  console.log('PASS: full game with contextual clicks, item tray, right-click/keyboard/touch examination, pony-to-Paul handover, safe recovery, fixed Horse & Hound ending, source link, save migration and responsive layouts; no browser errors.');
+} catch(error) {
+ console.error('Playthrough failed:',error.message);
+ if(!page.isClosed()){await page.screenshot({path:'output/test-failure.png'});console.error(await page.evaluate(()=>({save:localStorage.getItem('pony-quest-illustrated-v1'),speech:document.querySelector('#speech-text').textContent,speechHidden:document.querySelector('#speech').hidden,inventory:document.querySelector('#inventory-panel').hidden,inventoryDisabled:document.querySelector('#inventory-toggle').disabled})));}
+ throw error;
 } finally {await browser.close()}
