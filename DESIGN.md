@@ -1,92 +1,37 @@
-# Pony Quest 3D — "Excited, Not Distressed"
+# Pony Quest: illustrated reboot
 
-A three.js comedy game based on the real M25 Shetland pony incident of
-**Friday 10 October 2003**, in which Thames Valley Police spokesperson
-**Paul Anthem** told the press the loose pony "seemed excited rather than
-distressed." You play the pony. Paul's job is to make it sound under control.
+## Direction
 
-Source: https://www.horseandhound.co.uk/news/loose-shetland-closes-m25-41577
+Retain the escaped-Shetland-pony comedy premise. Rebuild around original, richly illustrated VGA-style environments inspired by the background craft of Monkey Island 2 and Indiana Jones and the Fate of Atlantis. The approved comparison board established warm country-lane colours and atmospheric teal/amber motorway lighting.
 
-## The comedic premise
+The artwork is a production asset, not a flattened interface. Canvas renders a 960 × 640 world with separate pony and Paul walk cycles, collectible rope, placed cone, contact shadow and police-light glints. Semantic HTML handles contextual interaction, the pocket tray, scene hotspots, dialogue and keyboard access. Backgrounds and sprites are local; image generation is never called during play.
 
-The screen shows two truths at once:
+## Prologue and first chapter
 
-- **What Paul tells the press** (calm PR narration, top of screen).
-- **What is actually happening** (you, a small horse, going the wrong way up
-  Britain's busiest motorway while four officers eat tarmac).
+1. **Prologue — the pony:** inspect the high gate latch, collect the loose rope, and use it to escape. Reaching the motorway ends the prologue.
+2. **Handover:** a chapter card announces Paul Anthem. The player explicitly continues as Paul, with a separate inventory and viewpoint. The pony remains visible as an NPC at the motorway.
+3. **Paul — secure the scene:** obtain a cone from the maintenance hut, mark the checkpoint, then radio Control to stop the traffic. Placing a cone alone does not close the road.
+4. **Paul — recover the pony:** return to the inn, ask the innkeeper for a carrot, and offer it to the pony once the road is closed. Early attempts preserve the carrot and explain the missing step.
+5. **Paul — speak to Horse & Hound:** report over the radio and choose a reply. The conversation converges on the real quote. Every route ends with the original Horse & Hound headline and a linked, paraphrased account of the real event.
 
-The funnier the gap between the two, the better. As you cause more chaos,
-Paul's narration drifts further from reality until it's pure damage control.
+Paul can travel between both rooms. Observations, dialogue, objectives, chapter labels and inventory labels follow the controlled character. Speech from the pony during Paul's chapter is animal sounds, not translated thoughts.
 
-## Verified facts to anchor the jokes
+There are no losing states, timed interactions or consumable dead ends. Hints follow the puzzle state. Player identity, story flags, inventory and pending chapter handover persist in local storage. Earlier pony-only saves preserve the escape and enter at the handover; they do not transfer the pony's old motorway inventory into Paul's pockets.
 
-| Fact | Use in game |
-|------|-------------|
-| 06:30 first call, road shut 06:50, caught 07:15, reopened 07:37 (47 min) | On-screen clock / closure timer = your score |
-| M25 between J15 and J16, near the M4 interchange | Level geometry, motorway signage |
-| Pony went **north on the southbound carriageway** (wrong way) | Core movement gag — bonus for facing oncoming traffic |
-| **Four officers + members of the public** caught it | The pursuers you evade |
-| Paul: "wandering... seemed excited rather than distressed" | Title + recurring narration callback |
-| Escaped from a nearby field of other Shetlands | Intro scene / "freedom" framing |
+## Art integration
 
-## Game loop (play-as-pony, chaos sandbox)
+The production backgrounds were generated separately from the approved concept board, with characters and UI omitted. Both characters have four equally spaced walking poses. Paul uses the original `paul.jpg` face reference with a game-specific roadside outfit. A corrected magenta-background export is chroma-keyed into cached sprite frames once on load, leaving clean game-layer transparency. Frames are bounded separately and anchored to the ground line. Position-dependent scaling gives a small amount of depth. Actors are drawn in ground-height order so Paul and the pony overlap correctly.
 
-1. **Intro:** dawn, a field of bored Shetlands. A gap in the fence. You trot out.
-2. **The motorway:** open carriageway, sparse early-morning traffic that builds.
-   - Drive the pony freely (arrow keys / WASD).
-   - Going *against* traffic flow scores more ("excited" meter).
-   - Cars brake, swerve, honk, pile into comedy tailbacks behind you.
-3. **The cops:** up to four officers spawn and try to corral you. Slapstick
-   physics — they slip, collide, lose hats. You juke them.
-4. **Pressure:** as chaos rises, the closure timer climbs and Paul's narration
-   escalates from "minor incident" to outright fiction.
-5. **Capture / ending:** eventually you let yourself be caught (or run the clock
-   to 47:00). End on the *Horse & Hound* front page with a headline shaped by
-   how much chaos you caused.
+Walk coordinates are constrained to each room's ground region. Background doors and scenery use explicit click regions with DOM buttons, so they work with mouse, touch and keyboard. Puzzle state drives which props are visible.
 
-## Scoring / meters
+## Scope
 
-- **Excitement** (not Distress): rises with wrong-way driving, near-misses,
-  cop pratfalls. Drives Paul's spin level.
-- **Tailback length:** visible queue of stopped cars; the game's "high score."
-- **Closure clock:** counts toward the real 47 minutes.
+This is the first playable chapter of a fresh implementation. More rooms, authored character animation, foreground occlusion layers, music, and a longer puzzle chain can be added to this foundation. Previous experiments are preserved separately.
 
-## Paul narration ladder (escalating spin)
+## Controls
 
-0. "We have a minor traffic management situation on the M25."
-1. "A small animal is being safely escorted from the carriageway."
-2. "The pony seems excited rather than distressed."  ← the real quote
-3. "Officers are in complete control of the situation."
-4. "The, ah — the pony is assisting officers with their enquiries."
-5. "I want to stress that at no point was anyone in any danger. Especially me."
-6. "Define 'closed'. The motorway is... resting."
+No persistent verb list. A primary click talks, collects, opens or walks according to the target. Right-click, keyboard E, or touch-and-hold examines it. Item selection happens in a small pop-up pocket tray, which closes after selecting an item. The bottom strip previews the action and provides the pockets toggle and item-cancel button. Optional examination is not required to solve any puzzle.
 
-(Lines unlock by chaos thresholds; tune later.)
+## Horse & Hound ending
 
-## Tech
-
-- **three.js** via CDN importmap (keeps the repo's self-contained,
-  single-file-playable style — no build step).
-- Low-poly, flat-shaded, stylised. No realistic assets needed; boxes + simple
-  meshes read fine and suit the tone.
-- Pony, cops, cars all primitive geometry. Procedural motorway plane with
-  painted lane markings (texture or thin boxes).
-- Overlay UI (narration, meters, clock) in plain HTML/CSS on top of the canvas.
-
-## Asset list (all primitive / procedural to start)
-
-- Pony: body + head + 4 legs + mane (boxes/cones), bobbing trot animation.
-- Cop: capsule body + box hat, ragdoll-ish lurch toward pony.
-- Car: box + window strip + wheels; pool of ~20, spawned on lanes.
-- Motorway: long plane, dashed centre lines, hard shoulder, gantry sign
-  ("M25 — J15 ▸ J16"), barriers.
-- Field intro: green plane, fence, 2–3 idle Shetlands.
-
-## Milestones
-
-- **M0 (this scaffold):** scene + drivable pony + chase camera + moving cars +
-  one cop + Paul narration overlay. Runnable today. ← `pony-quest-3d.html`
-- **M1:** wrong-way scoring + tailback queue logic + excitement meter.
-- **M2:** four cops with herding/pratfall behaviour.
-- **M3:** intro field scene + closure clock + Horse & Hound ending.
-- **M4:** polish — sound, hats flying off, narration timing, mobile/touch.
+The real report is the destination of the game, not an optional alternative headline. Source: [Loose Shetland closes M25](https://www.horseandhound.co.uk/news/loose-shetland-closes-m25-41577), Horse & Hound, 10 October 2003, 16:07. The epilogue uses the real headline, a short quotation attributed to Paul Anthem, a paraphrased summary and the 06:30 / 06:50 / 07:15 / 07:37 timeline. On small screens the article scrolls within the game. Its source link opens in a new tab; playing again starts with the pony.
